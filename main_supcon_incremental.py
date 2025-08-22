@@ -10,7 +10,7 @@ import pickle
 import numpy as np
 from PIL import Image
 
-import tensorboard_logger as tb_logger
+
 import torch
 import torch.backends.cudnn as cudnn
 from torchvision import transforms, datasets
@@ -121,7 +121,6 @@ def parse_option():
     if opt.data_folder is None:
         opt.data_folder = './datasets/'
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
-    opt.tb_path = './save/SupCon/{}_tensorboard'.format(opt.dataset)
 
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
@@ -159,9 +158,7 @@ def parse_option():
         else:
             opt.warmup_to = opt.learning_rate
 
-    opt.tb_folder = os.path.join(opt.tb_path, opt.model_name_new)
-    if not os.path.isdir(opt.tb_folder):
-        os.makedirs(opt.tb_folder)
+    
         
     opt.device =  "cpu" #torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -378,9 +375,6 @@ def main():
     old_targets = range(0, opt.num_init_classes)
     new_targets = range(opt.num_init_classes, opt.num_classes)
 
-    # tensorboard
-    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
-
     # training routine
     for epoch in range(1, opt.epochs + 1):
         #adjust_learning_rate(opt, optimizer, epoch)
@@ -393,10 +387,6 @@ def main():
         
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-
-        # tensorboard logger
-        logger.log_value('loss', loss, epoch)
-        logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         if epoch % opt.save_freq == 0:
             save_file = os.path.join(
