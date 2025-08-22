@@ -130,12 +130,17 @@ def parse_option():
     opt.model_name_new = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental'.\
                          format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.learning_rate,
                          opt.epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
+    # primary (incremental-style) previous-checkpoint name
     opt.model_name_old = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.\
                          format(opt.method, opt.dataset, opt.num_init_classes, opt.model, opt.learning_rate,
                          opt.epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
 
     opt.exemplar_file = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(opt.dataset, opt.num_init_classes, opt.model, opt.memory_size, opt.alfa, opt.temp, opt.fixed_memory)
-    
+    # ensure exemplar directory exists
+    exemplar_dir = os.path.dirname(opt.exemplar_file)
+    if exemplar_dir and not os.path.isdir(exemplar_dir):
+        os.makedirs(exemplar_dir)
+
     opt.save_folder = os.path.join(opt.model_path, opt.model_name_new)
 
     if not os.path.isdir(opt.save_folder):
@@ -195,26 +200,26 @@ def set_loader(opt, model_old):
     ])
 
     if opt.dataset == 'cifar10':
-        train_dataset = iCIFAR10(root='../datasets', train=True,
+        train_dataset = iCIFAR10(root=opt.data_folder, train=True,
                                  classes=range(opt.num_init_classes, opt.num_classes), download=True,
                                  transform=None)
-        original_dataset = iCIFAR10(root='../datasets', train=True,
+        original_dataset = iCIFAR10(root=opt.data_folder, train=True,
                                     classes=range(0, opt.num_init_classes), download=True,
                                     transform=None)
         
     elif opt.dataset == 'cifar100':
-        train_dataset = iCIFAR100(root='../datasets', train=True,
+        train_dataset = iCIFAR100(root=opt.data_folder, train=True,
                                   classes=range(opt.num_init_classes, opt.num_classes), download=True,                 
                                   transform=None)                      
-        original_dataset = iCIFAR100(root='../datasets', train=True,
+        original_dataset = iCIFAR100(root=opt.data_folder, train=True,
                                      classes=range(0, opt.num_init_classes), download=True,
                                      transform=None)
         
     elif opt.dataset == "mnist":
-        train_dataset = mnist(root='../datasets', train=True,
+        train_dataset = mnist(root=opt.data_folder, train=True,
                               classes=range(opt.num_init_classes, opt.num_classes), download=True,
                               transform=None)
-        original_dataset = mnist(root='../datasets', train=True,
+        original_dataset = mnist(root=opt.data_folder, train=True,
                                  classes=range(0, opt.num_init_classes), download=True,
                                  transform=None)
         
@@ -359,7 +364,17 @@ def main():
 
     # build model and criterion
     model_old, criterion = set_model(opt)      
-    model_old = load_model(model_old, os.path.join(opt.model_path, opt.model_name_old))
+    # resolve previous checkpoint path with fallback for older base-run naming
+    old_ckpt_primary = os.path.join(opt.model_path, opt.model_name_old)
+    old_ckpt = old_ckpt_primary
+    if not os.path.isfile(old_ckpt_primary):
+        legacy_name = '{}_{}_class_{}_{}_lr_{}_epoch_{}_bsz_{}_temp_{}_incremental/last.pth'.\
+            format(opt.method, opt.dataset, opt.num_init_classes, opt.model, opt.learning_rate,
+                   opt.epochs, opt.batch_size, opt.temp)
+        legacy_path = os.path.join(opt.model_path, legacy_name)
+        if os.path.isfile(legacy_path):
+            old_ckpt = legacy_path
+    model_old = load_model(model_old, old_ckpt)
     model_new = copy.deepcopy(model_old)
         
     # build data loader

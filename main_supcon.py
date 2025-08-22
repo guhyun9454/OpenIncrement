@@ -68,6 +68,14 @@ def parse_option():
     parser.add_argument('--data_folder', type=str, default=None, help='path to custom dataset')
     parser.add_argument('--size', type=int, default=32, help='parameter for RandomResizedCrop')
 
+    # incremental-style args (for folder naming consistency)
+    parser.add_argument('--alfa', type=float, default=0.2,
+                        help='alfa to balance loss function (used for naming only in base run)')
+    parser.add_argument('--memory_size', type=int, default=50,
+                        help='size of memory (naming only)')
+    parser.add_argument('--fixed_memory', type=int, default=0,
+                        help='size of fixed memory (naming only)')
+
     # method
     parser.add_argument('--method', type=str, default='SupCon',
                         choices=['SupCon', 'SimCLR'], help='choose method')
@@ -105,9 +113,9 @@ def parse_option():
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
-    opt.model_name = '{}_{}_class_{}_{}_lr_{}_epoch_{}_bsz_{}_temp_{}_incremental'.\
+    opt.model_name = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental'.\
         format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.learning_rate,
-               opt.epochs, opt.batch_size, opt.temp)
+               opt.epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
 
     if opt.cosine:
         opt.model_name = '{}_cosine'.format(opt.model_name)
@@ -163,17 +171,17 @@ def set_loader(opt):
     ])
 
     if opt.dataset == 'cifar10':
-        train_dataset = iCIFAR10(root='../datasets', train=False,                           #######
+        train_dataset = iCIFAR10(root=opt.data_folder, train=False,                           #######
                                  classes=range(opt.num_classes), download=True,
                                  transform=TwoCropTransform(train_transform))
         
     elif opt.dataset == 'cifar100':
-        train_dataset = iCIFAR100(root='../datasets', train=True,
+        train_dataset = iCIFAR100(root=opt.data_folder, train=True,
                                   classes=range(opt.num_classes), download=True,
                                   transform=TwoCropTransform(train_transform))
     
     elif opt.dataset == "mnist":
-        train_dataset = mnist(root='../datasets', train=True,
+        train_dataset = mnist(root=opt.data_folder, train=True,
                               classes=range(opt.num_classes), download=True,
                               transform=TwoCropTransform(train_transform))
     
