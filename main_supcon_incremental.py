@@ -55,6 +55,8 @@ def parse_option():
                         help='number of training epochs')
     parser.add_argument('--num_classes', type=int, default=20,
                         help='number of training classes')
+    parser.add_argument('--base_epochs', type=int, default=None,
+                        help='number of epochs used in the base run (for old ckpt naming)')
     parser.add_argument('--img_size', type=int, default=28,
                         help='image size')
     
@@ -127,13 +129,16 @@ def parse_option():
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
+    # base run used its own epochs for naming; accept explicit base_epochs to avoid mismatch
+    base_epochs_for_old_name = opt.base_epochs if opt.base_epochs is not None else opt.epochs
+
     opt.model_name_new = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental'.\
                          format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.learning_rate,
                          opt.epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
     # primary (incremental-style) previous-checkpoint name
     opt.model_name_old = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.\
                          format(opt.method, opt.dataset, opt.num_init_classes, opt.model, opt.learning_rate,
-                         opt.epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
+                         base_epochs_for_old_name, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
 
     opt.exemplar_file = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(opt.dataset, opt.num_init_classes, opt.model, opt.memory_size, opt.alfa, opt.temp, opt.fixed_memory)
     # ensure exemplar directory exists
@@ -147,7 +152,12 @@ def parse_option():
        os.makedirs(opt.save_folder)
 
     if opt.cosine:
-        opt.model_name = '{}_cosine'.format(opt.model_name)
+        opt.model_name_new = '{}_cosine'.format(opt.model_name_new)
+        # also consider that the base run may have used cosine naming
+        # append here for the primary guess; we'll still try both with/without later
+        old_dir, last_file = os.path.split(opt.model_name_old)
+        if last_file == 'last.pth':
+            opt.model_name_old = old_dir + '_cosine/last.pth'
 
     # warm-up for large-batch training,
     if opt.batch_size > 256:
@@ -374,13 +384,30 @@ def main():
 
     # build model and criterion
     model_old, criterion = set_model(opt)      
-    # resolve previous checkpoint path with fallback for older base-run naming
+    # resolve previous checkpoint path with robust fallbacks
     old_ckpt_primary = os.path.join(opt.model_path, opt.model_name_old)
     old_ckpt = old_ckpt_primary
+
     if not os.path.isfile(old_ckpt_primary):
+        # try toggling cosine suffix on directory name
+        old_dir, _ = os.path.split(old_ckpt_primary)
+        base_dir = old_dir  # directory without filename
+        if base_dir.endswith('_cosine'):
+            nocos_dir = base_dir[:-7]
+            nocos_path = os.path.join(nocos_dir, 'last.pth')
+            if os.path.isfile(nocos_path):
+                old_ckpt = nocos_path
+        else:
+            cos_dir = base_dir + '_cosine'
+            cos_path = os.path.join(cos_dir, 'last.pth')
+            if os.path.isfile(cos_path):
+                old_ckpt = cos_path
+
+    if not os.path.isfile(old_ckpt):
+        # fallback for older naming (no alfa/mem and singular 'epoch')
         legacy_name = '{}_{}_class_{}_{}_lr_{}_epoch_{}_bsz_{}_temp_{}_incremental/last.pth'.\
             format(opt.method, opt.dataset, opt.num_init_classes, opt.model, opt.learning_rate,
-                   opt.epochs, opt.batch_size, opt.temp)
+                   (opt.base_epochs if opt.base_epochs is not None else opt.epochs), opt.batch_size, opt.temp)
         legacy_path = os.path.join(opt.model_path, legacy_name)
         if os.path.isfile(legacy_path):
             old_ckpt = legacy_path

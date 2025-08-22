@@ -87,6 +87,7 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --alfa ${ALFA} \
     --batch_size ${BATCH_SIZE} \
     --fixed_memory ${FIXED_MEM} \
+    --base_epochs ${BASE_EPOCHS} \
     --num_init_classes ${current} \
     --num_classes ${next} \
     --epochs ${INC_EPOCHS} \
