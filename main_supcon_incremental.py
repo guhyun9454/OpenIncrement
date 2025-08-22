@@ -310,7 +310,9 @@ def train(train_loader, model_old, model_new, criterion, optimizer, epoch, opt, 
         f1, f2 = torch.split(features_new, [bsz, bsz], dim=0)
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
         if opt.method == 'SupCon':
-            loss_cls = criterion_cls(features, labels, target_labels=[10,11,12,13,14,15,16,17,18,19])
+            # determine new class labels range dynamically
+            new_targets = list(range(opt.num_init_classes, opt.num_classes))
+            loss_cls = criterion_cls(features, labels, target_labels=new_targets)
         elif opt.method == 'SimCLR':
             loss_cls = criterion_cls(features)
         else:
