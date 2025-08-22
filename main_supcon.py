@@ -152,8 +152,12 @@ def set_loader(opt):
         mean = (0.5071, 0.4867, 0.4408)
         std = (0.2675, 0.2565, 0.2761)
     elif opt.dataset == 'mnist':
-        mean = (0.1307,)
-        std = (0.3081,)
+        if opt.model.lower() == 'mlp':
+            mean = (0.1307,)
+            std = (0.3081,)
+        else:
+            mean = (0.1307, 0.1307, 0.1307)
+            std = (0.3081, 0.3081, 0.3081)
     elif opt.dataset == 'path':
         mean = eval(opt.mean)
         std = eval(opt.std)
@@ -161,14 +165,19 @@ def set_loader(opt):
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
 
-    train_transform = transforms.Compose([
+    tfms = []
+    # if using ResNet on MNIST, promote to 3 channels
+    if opt.dataset == 'mnist' and opt.model.lower() != 'mlp':
+        tfms.append(transforms.Grayscale(num_output_channels=3))
+    tfms += [
         #transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
         #transforms.RandomHorizontalFlip(),
         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         normalize,
-    ])
+    ]
+    train_transform = transforms.Compose(tfms)
 
     if opt.dataset == 'cifar10':
         train_dataset = iCIFAR10(root=opt.data_folder, train=False,                           #######
@@ -200,7 +209,7 @@ def set_loader(opt):
 
 
 def set_model(opt):
-    model = MLP()      #SupConResNet(name=opt.model)
+    model = MLP() if opt.model.lower() == 'mlp' else SupConResNet(name=opt.model)
     criterion = SupConLoss(temperature=opt.temp)
 
     # enable synchronized Batch Normalization

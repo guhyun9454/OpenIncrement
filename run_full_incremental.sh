@@ -20,7 +20,7 @@ cd "$(dirname "$0")"
 
 # Defaults
 DATASET="mnist"
-MODEL="mlp"
+MODEL="resnet18"
 DATA_FOLDER="./datasets"
 BASE_EPOCHS=200
 INC_EPOCHS=200
