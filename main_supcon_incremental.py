@@ -247,18 +247,80 @@ def set_loader(opt, model_old):
     else:
         raise ValueError(opt.dataset)
         
+    loaded_from_file = False
     if os.path.isfile(opt.exemplar_file):
         with open(opt.exemplar_file, "rb") as f:
-                    exemplar_sets, exemplar_labels, _, exemplar_centers = pickle.load(f)
+            exemplar_sets, exemplar_labels, _, exemplar_centers = pickle.load(f)
+            loaded_from_file = True
     else:
-        transform = transforms.Compose([transforms.ToTensor(), normalize])      # TODO what kind of transform to use for exemplar selection?
+        transform = transforms.Compose([transforms.ToTensor(), normalize])
         exemplar_sets, exemplar_labels, exemplar_centers = createExemplars(opt, original_dataset, model_old, transform)
     #print(exemplar_sets.shape)
         
+    # 통계 출력: 예시 메모리/신규 데이터셋 크기 및 클래스 분포
     exemplar_dataset = customDataset(exemplar_sets, exemplar_labels, transform=None)
-    train_dataset = torch.utils.data.ConcatDataset([exemplar_dataset, train_dataset])                               
+
+    # 클래스 분포(예시 메모리)
+    try:
+        import numpy as _np
+        exemplar_label_array = _np.array(exemplar_labels)
+        unique_exemplar_labels, exemplar_counts = _np.unique(exemplar_label_array, return_counts=True)
+        exemplar_count_by_class = dict(zip(unique_exemplar_labels.tolist(), exemplar_counts.tolist()))
+    except Exception:
+        exemplar_count_by_class = {}
+
+    # 클래스 분포(신규 학습 데이터)
+    try:
+        if hasattr(train_dataset, 'train_labels'):
+            new_labels_array = _np.array(train_dataset.train_labels)
+        elif hasattr(train_dataset, 'trainlabels'):
+            new_labels_array = _np.array(train_dataset.trainlabels)
+        else:
+            new_labels_array = None
+        if new_labels_array is not None:
+            unique_new_labels, new_counts = _np.unique(new_labels_array, return_counts=True)
+            new_count_by_class = dict(zip(unique_new_labels.tolist(), new_counts.tolist()))
+        else:
+            new_count_by_class = {}
+    except Exception:
+        new_count_by_class = {}
+
+    # 요약 로그
+    print("[Loader]")
+    print("  dataset: {} | model: {}".format(opt.dataset, opt.model))
+    print("  classes: old 0..{old_end} | learning {new_start}..{new_end} | total {total}".format(
+        old_end=opt.num_init_classes-1,
+        new_start=opt.num_init_classes,
+        new_end=opt.num_classes-1,
+        total=opt.num_classes
+    ))
+    if loaded_from_file:
+        print("  exemplars: loaded from '{}'".format(opt.exemplar_file))
+    else:
+        print("  exemplars: created and saved to '{}'".format(opt.exemplar_file))
+    print("  exemplars: total {} | per_class ~{} (fixed_memory {} | memory_size {})".format(
+        len(exemplar_labels),
+        getattr(opt, 'memory_per_class', None),
+        getattr(opt, 'fixed_memory', None),
+        getattr(opt, 'memory_size', None)))
+    if exemplar_count_by_class:
+        print("  exemplar class counts (subset): {}".format(
+            dict(list(exemplar_count_by_class.items())[:5])
+        ))
+    if new_count_by_class:
+        print("  new data class counts (subset): {}".format(
+            dict(list(new_count_by_class.items())[:5])
+        ))
+
+    # 합쳐진 데이터셋과 변환 적용
+    train_dataset = torch.utils.data.ConcatDataset([exemplar_dataset, train_dataset])
+    total_before_transform = len(train_dataset)
     train_dataset = apply_transform(train_dataset, TwoCropTransform(train_transform))
-    print(len(train_dataset))
+    print("  train samples: exemplars {} + new {} = {}".format(
+        len(exemplar_labels),
+        total_before_transform - len(exemplar_labels),
+        total_before_transform
+    ))
 
     train_sampler = None
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
@@ -382,6 +444,18 @@ def load_model(model, path):
 def main():
     opt = parse_option()
 
+    # 증분 단계 정보 출력
+    print("[Incremental Setup]")
+    print("  dataset: {} | model: {} | method: {}".format(opt.dataset, opt.model, opt.method))
+    print("  base_epochs: {} | inc_epochs: {} | batch_size: {} | lr: {} | temp: {} | alfa: {}".format(
+        getattr(opt, 'base_epochs', None), opt.epochs, opt.batch_size, opt.learning_rate, opt.temp, opt.alfa))
+    print("  classes: old 0..{old_end} | learning {new_start}..{new_end} | total {total}".format(
+        old_end=opt.num_init_classes-1,
+        new_start=opt.num_init_classes,
+        new_end=opt.num_classes-1,
+        total=opt.num_classes
+    ))
+
     # build model and criterion
     model_old, criterion = set_model(opt)      
     # resolve previous checkpoint path with robust fallbacks
@@ -411,11 +485,12 @@ def main():
         legacy_path = os.path.join(opt.model_path, legacy_name)
         if os.path.isfile(legacy_path):
             old_ckpt = legacy_path
+    print("  load previous checkpoint: {}".format(old_ckpt))
     model_old = load_model(model_old, old_ckpt)
     model_new = copy.deepcopy(model_old)
         
     # build data loader
-    train_loader = set_loader(opt, model_old)                  
+    train_loader = set_loader(opt, model_old)                 
     
     # build optimizer
     optimizer = set_optimizer(opt, model_new)
@@ -435,6 +510,8 @@ def main():
         time1 = time.time()
         #loss = incremental_train(train_loader, model, model, criterion,
         #                         old_targets, optimizer, epoch, opt)
+        print("[Epoch {}] learning classes {}..{} (total {}), memory per class {}".format(
+            epoch, opt.num_init_classes, opt.num_classes-1, opt.num_classes, getattr(opt, 'memory_per_class', None)))
         loss = train(train_loader, model_old, model_new, criterion, optimizer, epoch, opt, old_targets)
         
         time2 = time.time()

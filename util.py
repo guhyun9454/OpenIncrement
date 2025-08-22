@@ -83,7 +83,29 @@ def set_optimizer(opt, model):
 
 
 def save_model(model, optimizer, opt, epoch, save_file):
-    print('==> Saving...')
+    try:
+        current_lr = None
+        if hasattr(optimizer, 'param_groups') and len(optimizer.param_groups) > 0:
+            current_lr = optimizer.param_groups[0].get('lr', None)
+    except Exception:
+        current_lr = None
+
+    # 상세 체크포인트 정보 출력
+    print("==> Saving checkpoint")
+    print("    path: {}".format(save_file))
+    print("    epoch: {}".format(epoch))
+    if hasattr(opt, 'dataset'):
+        print("    dataset: {}".format(opt.dataset))
+    if hasattr(opt, 'model'):
+        print("    model: {}".format(opt.model))
+    if hasattr(opt, 'num_init_classes') and hasattr(opt, 'num_classes'):
+        print("    classes: total={} (learning {}..{} | old 0..{})".format(
+            opt.num_classes,
+            opt.num_init_classes,
+            max(opt.num_init_classes, opt.num_classes) - 1,
+            max(opt.num_init_classes - 1, 0)))
+    if current_lr is not None:
+        print("    lr: {:.6f}".format(current_lr))
     state = {
         'opt': opt,
         'model': model.state_dict(),
