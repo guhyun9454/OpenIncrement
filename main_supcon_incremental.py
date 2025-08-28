@@ -458,10 +458,8 @@ def main():
 
     # build model and criterion
     model_old, criterion = set_model(opt)      
-    # resolve previous checkpoint path strictly per sh script naming (cosine on)
+    # resolve previous checkpoint path strictly per sh script naming (no cosine suffix)
     base_dir = os.path.join(opt.model_path, os.path.dirname(opt.model_name_old))
-    if not base_dir.endswith('_cosine'):
-        base_dir = base_dir + '_cosine'
     old_ckpt = os.path.join(base_dir, 'last.pth')
     if not os.path.isfile(old_ckpt):
         raise FileNotFoundError('Previous checkpoint not found: {}'.format(old_ckpt))

@@ -134,8 +134,7 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --epochs ${INC_EPOCHS} \
     --img_size $([[ "${DATASET}" == "mnist" ]] && echo 28 || echo 32) \
     --print_freq ${PRINT_FREQ} \
-    --save_freq ${SAVE_FREQ} \
-    --cosine
+    --save_freq ${SAVE_FREQ}
   current=${next}
 
   # 3) Linear classifier training for current stage
