@@ -19,7 +19,7 @@ class customDataset(Dataset):
         self.data_array = data_array
         self.label_array = label_array
         #self.label_array = torch.from_numpy(self.label_array).view(len(self.data_array)).long()
-        print("label_array: ", type(self.label_array))
+        # print("label_array: ", type(self.label_array))
         self.transform = transform
         
     def __len__(self):
