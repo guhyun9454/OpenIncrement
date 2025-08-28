@@ -19,7 +19,7 @@ from resnet_big import SupConResNet
 from mlp import MLP
 from itertools import chain
 
-from metric import accuracy, compareLabelsOSR
+from sklearn import metrics
 
 
 def normalFeatureReading(data_loader, model):
@@ -203,17 +203,17 @@ if __name__ == "__main__":
         else:
             base_ds = mnist(root=args.data_folder, train=True, classes=range(num_classes), download=True, transform=None)
             data, labels = base_ds.traindata, base_ds.trainlabels
-        import numpy as _np
+        import numpy as np
         exemplar_sets = []
         exemplar_labels = []
         for c in range(num_classes):
-            idxs = _np.where(_np.array(labels) == c)[0][:args.memory_per_class]
+            idxs = np.where(np.array(labels) == c)[0][:args.memory_per_class]
             if len(idxs) == 0:
                 continue
             for i in idxs:
-                exemplar_sets.append(_np.array(data[i]))
+                exemplar_sets.append(np.array(data[i]))
                 exemplar_labels.append(c)
-        exemplar_sets = _np.array(exemplar_sets)
+        exemplar_sets = np.array(exemplar_sets)
         # transform same as above
         if dataset == 'cifar100' or dataset == 'cifar10':
             normalize = transforms.Normalize((0.5071, 0.4867, 0.4408) if dataset=='cifar100' else (0.4914,0.4822,0.4465),
@@ -285,26 +285,13 @@ if __name__ == "__main__":
             SOut.append(similarities)
         predictions.append(closest_class)
     
-    trueInliers, trueInlierstrueClass, trueOutiers, falseInliers, falseOutliers = compareLabelsOSR(predictions, test_labels, range(num_classes))
-    # print("Accuracy is: ", 1-compareLabels(predictions, test_labels)*1.0/len(test_labels))
-    # a = [i for i, x in enumerate(Rs) if x < 1.9]
-    # print("OSR", 1-len(a)*1.0 / len(test_labels))
-    bins = [x*0.1 for x in range(0, 200)]
-    plt.hist(RsIn, bins=bins, alpha=0.5, label="inlier LOF")
-    plt.hist(RsOut, bins=bins, alpha=0.5, label="outlier LOF")
-    plt.axvline(x=1.9, color="r", linestyle='--', lw=1)
-    plt.legend()
-    bins = [x*0.01 for x in range(0, 100)]
-    plt.hist(SIn, bins=bins, alpha=0.5, label="inlier LOF")
-    plt.hist(SOut, bins=bins, alpha=0.5, label="outlier LOF")
-    plt.axvline(x=0.2, color="r", linestyle='--', lw=1)
-    plt.legend()
-    precision, recall, accuracyAll, accuracyClass = accuracy(trueInliers, trueInlierstrueClass, trueOutiers, falseInliers, falseOutliers)
-    print("precision", precision)
-    print("recall", recall)
-    print("accuracyAll", accuracyAll)
-    print("accuracyClass", accuracyClass)
-    
-    plt.scatter(RsIn, SIn, label="inlier LOF")
-    plt.scatter(RsOut, SOut, label="outlier LOF")
-    plt.legend()
+    # OOD metric: AUROC & FPR@TPR95 using average similarity as ID score
+    id_scores = np.array(SIn)
+    ood_scores = np.array(SOut)
+    binary_labels = np.concatenate([np.ones(id_scores.shape[0]), np.zeros(ood_scores.shape[0])])
+    all_scores = np.concatenate([id_scores, ood_scores])
+    fpr, tpr, _ = metrics.roc_curve(binary_labels, all_scores, drop_intermediate=False)
+    auroc = metrics.auc(fpr, tpr)
+    idx_tpr95 = np.abs(tpr - 0.95).argmin()
+    fpr_at_tpr95 = fpr[idx_tpr95]
+    print(f"[OSNN]: AUROC {auroc * 100:.2f}% | FPR@TPR95 {fpr_at_tpr95 * 100:.2f}%")
