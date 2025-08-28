@@ -111,18 +111,46 @@ def compareLabels(estLabels, trueLabels):
 
 
 if __name__ == "__main__":
+    import argparse, os
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar10','cifar100','mnist'])
+    parser.add_argument('--model', type=str, default='resnet18')
+    parser.add_argument('--num_classes', type=int, default=20)
+    parser.add_argument('--K', type=int, default=10)
+    parser.add_argument('--Ts', type=float, default=0.85)
+    parser.add_argument('--Tr', type=float, default=1.9)
+    parser.add_argument('--data_folder', type=str, default='../datasets')
+    parser.add_argument('--features_dir', type=str, default='./features')
+    parser.add_argument('--fixed_memory', type=int, default=2000)
+    parser.add_argument('--alfa', type=float, default=0.2)
+    parser.add_argument('--temp', type=float, default=0.05)
+    parser.add_argument('--epochs', type=int, default=600)
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--learning_rate', type=float, default=0.001)
+    args = parser.parse_args()
+
+    Ts = args.Ts
+    Tr = args.Tr
+    K = args.K
+    num_classes = args.num_classes
+    dataset = args.dataset
+    classes = [i for i in range(num_classes)] + [i for i in range(90, 100)]
+    exemplar_feature_path = os.path.join(
+        args.features_dir,
+        'exemplar_{}_class_{}_{}_memorysize_50_alfa_{}_temp_{}_mem_{}'.format(dataset, num_classes, args.model, args.alfa, args.temp, args.fixed_memory)
+    )
     
-    Ts = 0.85
-    Tr = 1.9
-    
-    K = 10
-    num_classes = 20
-    classes = [i for i in range(num_classes)]  +  [i for i in range(90, 100)]                            ####
-    dataset = "cifar100"
-    exemplar_feature_path  = "./features/exemplar_cifar100_class_20_resnet18_memorysize_50_alfa_0.2_temp_0.05_mem_2000"   
-    
-    model = SupConResNet("resnet18")
-    ckpt = torch.load("./save/SupCon_cifar100_class_20_resnet18_lr_0.001_epoch_600_bsz_512_temp_0.05_alfa_0.2_mem_2000_incremental/last.pth", map_location='cpu')
+    model = SupConResNet(args.model) if args.model != 'mlp' else MLP()
+    ckpt_name = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.format(
+        'SupCon', dataset, num_classes, args.model, args.learning_rate, args.epochs, args.batch_size, args.temp, args.alfa, args.fixed_memory)
+    ckpt_path = os.path.join('./save/SupCon/{}_models'.format(dataset), ckpt_name)
+    if not os.path.isfile(ckpt_path):
+        # fallback to legacy naming
+        legacy = '{}_{}_class_{}_{}_lr_{}_epoch_{}_bsz_{}_temp_{}_incremental/last.pth'.format(
+            'SupCon', dataset, num_classes, args.model, args.learning_rate, args.epochs, args.batch_size, args.temp)
+        legacy_path = os.path.join('./save/SupCon/{}_models'.format(dataset), legacy)
+        ckpt_path = legacy_path if os.path.isfile(legacy_path) else ckpt_path
+    ckpt = torch.load(ckpt_path, map_location='cpu')
     state_dict = ckpt['model']
 
     new_state_dict = {}
@@ -145,7 +173,7 @@ if __name__ == "__main__":
                                         transforms.ToTensor(),
                                         transforms.Normalize((0.5071, 0.4867, 0.4408),
                                                              (0.2675, 0.2565, 0.2761)),])
-        test_set = iCIFAR100(root='../datasets', train=False,                        
+        test_set = iCIFAR100(root=args.data_folder, train=False,                        
                              classes=classes,
                              download=True, transform=transform)
         test_loader = torch.utils.data.DataLoader(test_set, batch_size=1,
@@ -156,7 +184,7 @@ if __name__ == "__main__":
                                         transforms.ToTensor(),
                                         transforms.Normalize((0.4914, 0.4822, 0.4465),
                                                              (0.2023, 0.1994, 0.2010)),])
-        test_set = iCIFAR10(root='../datasets', train=False,                        
+        test_set = iCIFAR10(root=args.data_folder, train=False,                        
                             classes=classes,
                             download=True, transform=transform)
         test_loader = torch.utils.data.DataLoader(test_set, batch_size=1,
@@ -167,7 +195,7 @@ if __name__ == "__main__":
                                         transforms.ToTensor(),
                                         transforms.Normalize((0.1307,),
                                                              (0.3081,)),])
-        test_set = mnist(root='../datasets', train=False,
+        test_set = mnist(root=args.data_folder, train=False,
                          classes=classes, download=True,                                #####
                          transform=transform)
         test_loader = torch.utils.data.DataLoader(test_set, batch_size=1,

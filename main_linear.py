@@ -54,9 +54,16 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--dataset', type=str, default='cifar100',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100', 'mnist'], help='dataset')
     parser.add_argument('--method', type=str, default='SupCon',
                         choices=['SupCon', 'SimCLR'], help='choose method')
+    parser.add_argument('--data_folder', type=str, default='./datasets/', help='path to dataset root')
+
+    # naming alignment with encoder checkpoints
+    parser.add_argument('--temp', type=float, default=0.05)
+    parser.add_argument('--alfa', type=float, default=0.2)
+    parser.add_argument('--fixed_memory', type=int, default=2000)
+    parser.add_argument('--base_epochs', type=int, default=600, help='epochs used in base encoder run (for ckpt naming)')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -70,18 +77,18 @@ def parse_option():
     opt = parser.parse_args()
 
     # set the path according to the environment
-    opt.data_folder = './datasets/'
 
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
-    opt.model_path = './save/'
-    opt.model_name = '{}_{}_class_{}_{}_lr_0.001_epoch_600_bsz_512_temp_0.05_alfa_0.05_mem_2000_incremental/last.pth'.\
-                         format(opt.method, opt.dataset, opt.num_classes, opt.model)
-    
-    opt.save_path = "./save/Linear_{}_{}_class_{}_mem_2000.pt".format(opt.method, opt.dataset, opt.num_classes)
+    opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
+    opt.model_name = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.\
+                         format(opt.method, opt.dataset, opt.num_classes, opt.model,
+                                0.001, opt.base_epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
+
+    opt.save_path = "./save/Linear_{}_{}_class_{}_{}_mem_{}.pt".format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.fixed_memory)
 
     return opt
 
@@ -126,30 +133,36 @@ def set_loader(opt):
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
     elif opt.dataset == 'mnist':
-        mean = (0.1307,)
-        std = (0.3081,)
+        if opt.model.lower() == 'mlp':
+            mean = (0.1307,)
+            std = (0.3081,)
+        else:
+            mean = (0.1307, 0.1307, 0.1307)
+            std = (0.3081, 0.3081, 0.3081)
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
 
-    train_transform = transforms.Compose([
-        #transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
-        #transforms.RandomHorizontalFlip(),
+    tfms = []
+    if opt.dataset == 'mnist' and opt.model.lower() != 'mlp':
+        tfms.append(transforms.Grayscale(num_output_channels=3))
+    tfms += [
         transforms.ToTensor(),
         normalize,
-    ])
+    ]
+    train_transform = transforms.Compose(tfms)
 
     if opt.dataset == 'cifar10':
-        train_dataset = iCIFAR10(root='../datasets', train=True,
+        train_dataset = iCIFAR10(root=opt.data_folder, train=True,
                                  classes=range(opt.num_classes), download=True,
                                  transform=train_transform)
         
     elif opt.dataset == 'cifar100':
-        train_dataset = iCIFAR100(root='../datasets', train=True,
+        train_dataset = iCIFAR100(root=opt.data_folder, train=True,
                                   classes=range(opt.num_classes), download=True,
                                   transform=train_transform)
     elif opt.dataset == "mnist":
-        train_dataset = mnist(root='../datasets', train=True,
+        train_dataset = mnist(root=opt.data_folder, train=True,
                               classes=range(opt.num_classes), download=True,
                               transform=train_transform)
         

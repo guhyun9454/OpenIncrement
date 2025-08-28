@@ -33,6 +33,8 @@ INIT_CLASSES=8
 TOTAL_CLASSES=10
 PRINT_FREQ=10
 SAVE_FREQ=50
+LINEAR_EPOCHS=50
+LINEAR_LR=0.1
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -97,5 +99,35 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
   current=${next}
   sleep 1
 done
+
+# 3) Linear classifier training (freeze encoder)
+python3 main_linear.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --epochs ${LINEAR_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --learning_rate ${LINEAR_LR} \
+  --num_classes ${TOTAL_CLASSES} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --base_epochs ${BASE_EPOCHS}
+
+# 3-1) Classifier evaluation on inlier
+python3 test_linear.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --num_classes ${TOTAL_CLASSES}
+
+# 4) OSR evaluation (KNN-style)
+python3 knn.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --num_classes ${TOTAL_CLASSES} \
+  --epochs ${INC_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --learning_rate ${LR} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
 
 echo "All steps done."

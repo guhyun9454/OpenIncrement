@@ -55,7 +55,7 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--dataset', type=str, default='cifar100',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+                        choices=['cifar10', 'cifar100', 'mnist'], help='dataset')
     parser.add_argument('--method', type=str, default='SupCon',
                         choices=['SupCon', 'SimCLR'], help='choose method')
 
@@ -78,11 +78,11 @@ def parse_option():
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
-    opt.model_path = './save/'
-    opt.model_name = '{}_{}_class_{}_{}_lr_0.001_epoch_600_bsz_512_temp_0.05_alfa_0.2_mem_2000_incremental/last.pth'.\
+    opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
+    opt.model_name = '{}_{}_class_{}_{}_lr_0.001_epochs_600_bsz_512_temp_0.05_alfa_0.2_mem_2000_incremental/last.pth'.\
                          format(opt.method, opt.dataset, opt.num_classes, opt.model)
     
-    opt.open_path = "./save/Linear_{}_{}_class_{}_mem_2000.pt".format(opt.method, opt.dataset, opt.num_classes)
+    opt.open_path = "./save/Linear_{}_{}_class_{}_{}_mem_2000.pt".format(opt.method, opt.dataset, opt.num_classes, opt.model)
 
     return opt
 
@@ -128,30 +128,29 @@ def set_loader(opt):
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
     elif opt.dataset == 'mnist':
-        mean = (0.1307,)
-        std = (0.3081,)
+        mean = (0.1307, 0.1307, 0.1307)
+        std = (0.3081, 0.3081, 0.3081)
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
 
     train_transform = transforms.Compose([
-        #transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
-        #transforms.RandomHorizontalFlip(),
+        transforms.Grayscale(num_output_channels=3) if opt.dataset == 'mnist' else transforms.Lambda(lambda x: x),
         transforms.ToTensor(),
         normalize,
     ])
 
     if opt.dataset == 'cifar10':
-        test_dataset = iCIFAR10(root='../datasets', train=False,
+        test_dataset = iCIFAR10(root=opt.data_folder, train=False,
                                  classes=range(opt.num_classes), download=True,
                                  transform=train_transform)
         
     elif opt.dataset == 'cifar100':
-        test_dataset = iCIFAR100(root='../datasets', train=False,
+        test_dataset = iCIFAR100(root=opt.data_folder, train=False,
                                   classes=range(opt.num_classes), download=True,
                                   transform=train_transform)
     elif opt.dataset == "mnist":
-        test_dataset = mnist(root='../datasets', train=False,
+        test_dataset = mnist(root=opt.data_folder, train=False,
                               classes=range(opt.num_classes), download=True,
                               transform=train_transform)
         
