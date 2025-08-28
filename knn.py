@@ -14,6 +14,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
 from data_loader import iCIFAR100, iCIFAR10, mnist
+from dataset import customDataset
 from resnet_big import SupConResNet
 from mlp import MLP
 from itertools import chain
@@ -122,6 +123,8 @@ if __name__ == "__main__":
     parser.add_argument('--data_folder', type=str, default='../datasets')
     parser.add_argument('--features_dir', type=str, default='./features')
     parser.add_argument('--fixed_memory', type=int, default=2000)
+    parser.add_argument('--memory_per_class', type=int, default=50)
+    parser.add_argument('--exemplar_file', type=str, default='', help='path to exemplar file from incremental step')
     parser.add_argument('--alfa', type=float, default=0.2)
     parser.add_argument('--temp', type=float, default=0.05)
     parser.add_argument('--epochs', type=int, default=600)
@@ -137,7 +140,7 @@ if __name__ == "__main__":
     classes = [i for i in range(num_classes)] + [i for i in range(90, 100)]
     exemplar_feature_path = os.path.join(
         args.features_dir,
-        'exemplar_{}_class_{}_{}_memorysize_50_alfa_{}_temp_{}_mem_{}'.format(dataset, num_classes, args.model, args.alfa, args.temp, args.fixed_memory)
+        'exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(dataset, num_classes, args.model, args.memory_per_class, args.alfa, args.temp, args.fixed_memory)
     )
     
     model = SupConResNet(args.model) if args.model != 'mlp' else MLP()
@@ -163,8 +166,70 @@ if __name__ == "__main__":
     model.load_state_dict(state_dict)
     model.eval()
     
-    with open(exemplar_feature_path, "rb") as f:
-        exemplar_features, exemplar_labels = pickle.load(f)
+    exemplar_features = None
+    exemplar_labels = None
+    # 1) preferred: provided exemplar_file (raw images/labels) -> compute features now
+    if args.exemplar_file and os.path.isfile(args.exemplar_file):
+        with open(args.exemplar_file, 'rb') as f:
+            exemplar_sets, exemplar_labels, _, _ = pickle.load(f)
+        # build transform consistent with dataset
+        if dataset == 'cifar100' or dataset == 'cifar10':
+            normalize = transforms.Normalize((0.5071, 0.4867, 0.4408) if dataset=='cifar100' else (0.4914,0.4822,0.4465),
+                                             (0.2675, 0.2565, 0.2761) if dataset=='cifar100' else (0.2023,0.1994,0.2010))
+            tfm = transforms.Compose([transforms.ToTensor(), normalize])
+        else:
+            if args.model == 'mlp':
+                normalize = transforms.Normalize((0.1307,), (0.3081,))
+                tfm = transforms.Compose([transforms.ToTensor(), normalize])
+            else:
+                normalize = transforms.Normalize((0.1307,0.1307,0.1307), (0.3081,0.3081,0.3081))
+                tfm = transforms.Compose([transforms.Grayscale(num_output_channels=3), transforms.ToTensor(), normalize])
+        ex_dataset = customDataset(exemplar_sets, exemplar_labels, transform=tfm)
+        ex_loader = torch.utils.data.DataLoader(ex_dataset, batch_size=64, shuffle=False, num_workers=2)
+        feats, labs = normalFeatureReading(ex_loader, model)
+        exemplar_features, exemplar_labels = feats, labs
+    # 2) fallback: precomputed features file if exists
+    elif os.path.isfile(exemplar_feature_path):
+        with open(exemplar_feature_path, "rb") as f:
+            exemplar_features, exemplar_labels = pickle.load(f)
+    # 3) last resort: build random exemplars from training data on-the-fly
+    else:
+        if dataset == 'cifar100':
+            base_ds = iCIFAR100(root=args.data_folder, train=True, classes=range(num_classes), download=True, transform=None)
+            data, labels = base_ds.train_data, base_ds.train_labels
+        elif dataset == 'cifar10':
+            base_ds = iCIFAR10(root=args.data_folder, train=True, classes=range(num_classes), download=True, transform=None)
+            data, labels = base_ds.train_data, base_ds.train_labels
+        else:
+            base_ds = mnist(root=args.data_folder, train=True, classes=range(num_classes), download=True, transform=None)
+            data, labels = base_ds.traindata, base_ds.trainlabels
+        import numpy as _np
+        exemplar_sets = []
+        exemplar_labels = []
+        for c in range(num_classes):
+            idxs = _np.where(_np.array(labels) == c)[0][:args.memory_per_class]
+            if len(idxs) == 0:
+                continue
+            for i in idxs:
+                exemplar_sets.append(_np.array(data[i]))
+                exemplar_labels.append(c)
+        exemplar_sets = _np.array(exemplar_sets)
+        # transform same as above
+        if dataset == 'cifar100' or dataset == 'cifar10':
+            normalize = transforms.Normalize((0.5071, 0.4867, 0.4408) if dataset=='cifar100' else (0.4914,0.4822,0.4465),
+                                             (0.2675, 0.2565, 0.2761) if dataset=='cifar100' else (0.2023,0.1994,0.2010))
+            tfm = transforms.Compose([transforms.ToTensor(), normalize])
+        else:
+            if args.model == 'mlp':
+                normalize = transforms.Normalize((0.1307,), (0.3081,))
+                tfm = transforms.Compose([transforms.ToTensor(), normalize])
+            else:
+                normalize = transforms.Normalize((0.1307,0.1307,0.1307), (0.3081,0.3081,0.3081))
+                tfm = transforms.Compose([transforms.Grayscale(num_output_channels=3), transforms.ToTensor(), normalize])
+        ex_dataset = customDataset(exemplar_sets, exemplar_labels, transform=tfm)
+        ex_loader = torch.utils.data.DataLoader(ex_dataset, batch_size=64, shuffle=False, num_workers=2)
+        feats, labs = normalFeatureReading(ex_loader, model)
+        exemplar_features, exemplar_labels = feats, labs
         
 
     if dataset == "cifar100":

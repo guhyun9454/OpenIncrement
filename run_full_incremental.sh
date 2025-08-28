@@ -97,6 +97,38 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --print_freq ${PRINT_FREQ} \
     --save_freq ${SAVE_FREQ}
   current=${next}
+
+  # 3) Linear classifier training for current stage
+  python3 main_linear.py \
+    --dataset ${DATASET} \
+    --model ${MODEL} \
+    --data_folder ${DATA_FOLDER} \
+    --epochs ${LINEAR_EPOCHS} \
+    --batch_size ${BATCH_SIZE} \
+    --learning_rate ${LINEAR_LR} \
+    --num_classes ${next} \
+    --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+    --base_epochs ${BASE_EPOCHS} \
+    --encoder_epochs ${INC_EPOCHS} \
+    --encoder_learning_rate ${LR}
+
+  # 3-1) Classifier evaluation on inlier for current stage
+  python3 test_linear.py \
+    --dataset ${DATASET} \
+    --model ${MODEL} \
+    --data_folder ${DATA_FOLDER} \
+    --num_classes ${next}
+
+  # 4) OSR evaluation for current stage
+  python3 knn.py \
+    --dataset ${DATASET} \
+    --model ${MODEL} \
+    --data_folder ${DATA_FOLDER} \
+    --num_classes ${next} \
+    --epochs ${INC_EPOCHS} \
+    --batch_size ${BATCH_SIZE} \
+    --learning_rate ${LR} \
+    --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
   sleep 1
 done
 
