@@ -64,6 +64,8 @@ def parse_option():
     parser.add_argument('--alfa', type=float, default=0.2)
     parser.add_argument('--fixed_memory', type=int, default=2000)
     parser.add_argument('--base_epochs', type=int, default=600, help='epochs used in base encoder run (for ckpt naming)')
+    parser.add_argument('--encoder_epochs', type=int, default=None, help='epochs used in encoder training for current stage')
+    parser.add_argument('--encoder_learning_rate', type=float, default=0.001, help='lr used in encoder training (for ckpt naming)')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -84,9 +86,10 @@ def parse_option():
         opt.lr_decay_epochs.append(int(it))
 
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
+    epochs_for_ckpt = opt.encoder_epochs if opt.encoder_epochs is not None else opt.base_epochs
     opt.model_name = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.\
                          format(opt.method, opt.dataset, opt.num_classes, opt.model,
-                                0.001, opt.base_epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
+                                opt.encoder_learning_rate, epochs_for_ckpt, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
 
     opt.save_path = "./save/Linear_{}_{}_class_{}_{}_mem_{}.pt".format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.fixed_memory)
 

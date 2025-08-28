@@ -53,6 +53,8 @@ while [[ $# -gt 0 ]]; do
     --total_classes) TOTAL_CLASSES="$2"; shift 2;;
     --print_freq) PRINT_FREQ="$2"; shift 2;;
     --save_freq) SAVE_FREQ="$2"; shift 2;;
+    --linear_epochs) LINEAR_EPOCHS="$2"; shift 2;;
+    --linear_lr) LINEAR_LR="$2"; shift 2;;  
     *) echo "Unknown arg: $1"; exit 1;;
   esac
 done
