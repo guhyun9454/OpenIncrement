@@ -26,11 +26,17 @@ def normalFeatureReading(data_loader, model):
     features = []
     labels = []
 
-    for i, (img, l) in enumerate(data_loader):
-
-        output = model(img)
-        features.append(output.detach().numpy())
-        labels.append(l.item())
+    with torch.no_grad():
+        for i, (img, l) in enumerate(data_loader):
+            outputs = model(img)
+            out_np = outputs.detach().cpu().numpy()
+            if isinstance(l, torch.Tensor):
+                lab_np = l.detach().cpu().numpy()
+            else:
+                lab_np = np.array(l)
+            for j in range(out_np.shape[0]):
+                features.append(out_np[j])
+                labels.append(int(lab_np[j]))
         
     return features, labels
         
@@ -56,7 +62,7 @@ def KNN(test_feature, exemplars, K):
     ind = np.argsort(similarities)[-K:]
     closest_labels = []
     for i in ind:
-        closest_labels.append(exemplar_labels[i].item())
+        closest_labels.append(exemplar_labels[i])
     
     closest_class = most_frequent(closest_labels)
     
@@ -76,7 +82,7 @@ def OSNN(test_feature, exemplars, K):
     ind = np.argsort(similarities)[-K:]
     closest_labels = []
     for i in ind:
-        closest_labels.append(exemplar_labels[i].item())
+        closest_labels.append(exemplar_labels[i])
     
     occurence_count = Counter(closest_labels)
     if len(occurence_count) == 1:
