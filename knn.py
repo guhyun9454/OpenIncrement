@@ -143,7 +143,17 @@ if __name__ == "__main__":
     K = args.K
     num_classes = args.num_classes
     dataset = args.dataset
-    classes = [i for i in range(num_classes)] + [i for i in range(90, 100)]
+    # 동적으로 OOD를 미학습 클래스(남은 클래스)로 설정
+    if dataset == 'cifar100':
+        total_dataset_classes = 100
+    elif dataset in ['cifar10', 'mnist']:
+        total_dataset_classes = 10
+    else:
+        total_dataset_classes = num_classes
+
+    inlier_classes = list(range(num_classes))
+    ood_classes = list(range(num_classes, total_dataset_classes))
+    classes = inlier_classes + ood_classes
     exemplar_feature_path = os.path.join(
         args.features_dir,
         'exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(dataset, num_classes, args.model, args.memory_per_class, args.alfa, args.temp, args.fixed_memory)
@@ -294,10 +304,13 @@ if __name__ == "__main__":
     # OOD metric: AUROC & FPR@TPR95 using average similarity as ID score
     id_scores = np.array(SIn)
     ood_scores = np.array(SOut)
-    binary_labels = np.concatenate([np.ones(id_scores.shape[0]), np.zeros(ood_scores.shape[0])])
-    all_scores = np.concatenate([id_scores, ood_scores])
-    fpr, tpr, _ = metrics.roc_curve(binary_labels, all_scores, drop_intermediate=False)
-    auroc = metrics.auc(fpr, tpr)
-    idx_tpr95 = np.abs(tpr - 0.95).argmin()
-    fpr_at_tpr95 = fpr[idx_tpr95]
-    print(f"[OSNN]: AUROC {auroc * 100:.2f}% | FPR@TPR95 {fpr_at_tpr95 * 100:.2f}%")
+    if id_scores.size == 0 or ood_scores.size == 0:
+        print(f"[OSNN]: OOD metric skipped (ID n={id_scores.size}, OOD n={ood_scores.size})")
+    else:
+        binary_labels = np.concatenate([np.ones(id_scores.shape[0]), np.zeros(ood_scores.shape[0])])
+        all_scores = np.concatenate([id_scores, ood_scores])
+        fpr, tpr, _ = metrics.roc_curve(binary_labels, all_scores, drop_intermediate=False)
+        auroc = metrics.auc(fpr, tpr)
+        idx_tpr95 = np.abs(tpr - 0.95).argmin()
+        fpr_at_tpr95 = fpr[idx_tpr95]
+        print(f"[OSNN]: AUROC {auroc * 100:.2f}% | FPR@TPR95 {fpr_at_tpr95 * 100:.2f}%")
