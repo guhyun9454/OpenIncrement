@@ -72,7 +72,8 @@ python3 main_supcon.py \
   --print_freq ${PRINT_FREQ} \
   --save_freq ${SAVE_FREQ} \
   --alfa ${ALFA} \
-  --fixed_memory ${FIXED_MEM}
+  --fixed_memory ${FIXED_MEM} \
+  --cosine
 
 # 1-1) Base 직후 선형 분류기 학습 (freeze encoder)
 python3 main_linear.py \
