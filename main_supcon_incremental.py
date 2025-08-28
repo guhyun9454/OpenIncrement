@@ -458,33 +458,13 @@ def main():
 
     # build model and criterion
     model_old, criterion = set_model(opt)      
-    # resolve previous checkpoint path with robust fallbacks
-    old_ckpt_primary = os.path.join(opt.model_path, opt.model_name_old)
-    old_ckpt = old_ckpt_primary
-
-    if not os.path.isfile(old_ckpt_primary):
-        # try toggling cosine suffix on directory name
-        old_dir, _ = os.path.split(old_ckpt_primary)
-        base_dir = old_dir  # directory without filename
-        if base_dir.endswith('_cosine'):
-            nocos_dir = base_dir[:-7]
-            nocos_path = os.path.join(nocos_dir, 'last.pth')
-            if os.path.isfile(nocos_path):
-                old_ckpt = nocos_path
-        else:
-            cos_dir = base_dir + '_cosine'
-            cos_path = os.path.join(cos_dir, 'last.pth')
-            if os.path.isfile(cos_path):
-                old_ckpt = cos_path
-
+    # resolve previous checkpoint path strictly per sh script naming (cosine on)
+    base_dir = os.path.join(opt.model_path, os.path.dirname(opt.model_name_old))
+    if not base_dir.endswith('_cosine'):
+        base_dir = base_dir + '_cosine'
+    old_ckpt = os.path.join(base_dir, 'last.pth')
     if not os.path.isfile(old_ckpt):
-        # fallback for older naming (no alfa/mem and singular 'epoch')
-        legacy_name = '{}_{}_class_{}_{}_lr_{}_epoch_{}_bsz_{}_temp_{}_incremental/last.pth'.\
-            format(opt.method, opt.dataset, opt.num_init_classes, opt.model, opt.learning_rate,
-                   (opt.base_epochs if opt.base_epochs is not None else opt.epochs), opt.batch_size, opt.temp)
-        legacy_path = os.path.join(opt.model_path, legacy_name)
-        if os.path.isfile(legacy_path):
-            old_ckpt = legacy_path
+        raise FileNotFoundError('Previous checkpoint not found: {}'.format(old_ckpt))
     print("  load previous checkpoint: {}".format(old_ckpt))
     model_old = load_model(model_old, old_ckpt)
     model_new = copy.deepcopy(model_old)

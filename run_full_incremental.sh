@@ -128,13 +128,14 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --alfa ${ALFA} \
     --batch_size ${BATCH_SIZE} \
     --fixed_memory ${FIXED_MEM} \
-    --base_epochs ${BASE_EPOCHS} \
+    --base_epochs $([[ ${current} -eq ${INIT_CLASSES} ]] && echo ${BASE_EPOCHS} || echo ${INC_EPOCHS}) \
     --num_init_classes ${current} \
     --num_classes ${next} \
     --epochs ${INC_EPOCHS} \
     --img_size $([[ "${DATASET}" == "mnist" ]] && echo 28 || echo 32) \
     --print_freq ${PRINT_FREQ} \
-    --save_freq ${SAVE_FREQ}
+    --save_freq ${SAVE_FREQ} \
+    --cosine
   current=${next}
 
   # 3) Linear classifier training for current stage
