@@ -74,6 +74,42 @@ python3 main_supcon.py \
   --alfa ${ALFA} \
   --fixed_memory ${FIXED_MEM}
 
+# 1-1) Base 직후 선형 분류기 학습 (freeze encoder)
+python3 main_linear.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --epochs ${LINEAR_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --learning_rate ${LINEAR_LR} \
+  --num_classes ${INIT_CLASSES} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --base_epochs ${BASE_EPOCHS} \
+  --encoder_epochs ${BASE_EPOCHS} \
+  --encoder_learning_rate ${LR}
+
+# 1-2) Base 직후 인리어 평가
+python3 test_linear.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --num_classes ${INIT_CLASSES} \
+  --batch_size ${BATCH_SIZE} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --encoder_epochs ${BASE_EPOCHS} \
+  --encoder_learning_rate ${LR}
+
+# 1-3) Base 직후 OOD(OSR) 평가
+python3 knn.py \
+  --dataset ${DATASET} \
+  --model ${MODEL} \
+  --data_folder ${DATA_FOLDER} \
+  --num_classes ${INIT_CLASSES} \
+  --epochs ${BASE_EPOCHS} \
+  --batch_size ${BATCH_SIZE} \
+  --learning_rate ${LR} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
+
 # 2) Incremental steps (INIT_CLASSES -> TOTAL_CLASSES by step of 10 or the remainder)
 current=${INIT_CLASSES}
 while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
