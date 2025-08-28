@@ -119,7 +119,11 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --dataset ${DATASET} \
     --model ${MODEL} \
     --data_folder ${DATA_FOLDER} \
-    --num_classes ${next}
+    --num_classes ${next} \
+    --batch_size ${BATCH_SIZE} \
+    --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+    --encoder_epochs ${INC_EPOCHS} \
+    --encoder_learning_rate ${LR}
 
   # 4) OSR evaluation for current stage
   python3 knn.py \
@@ -144,14 +148,20 @@ python3 main_linear.py \
   --learning_rate ${LINEAR_LR} \
   --num_classes ${TOTAL_CLASSES} \
   --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
-  --base_epochs ${BASE_EPOCHS}
+  --base_epochs ${BASE_EPOCHS} \
+  --encoder_epochs ${INC_EPOCHS} \
+  --encoder_learning_rate ${LR}
 
 # 3-1) Classifier evaluation on inlier
 python3 test_linear.py \
   --dataset ${DATASET} \
   --model ${MODEL} \
   --data_folder ${DATA_FOLDER} \
-  --num_classes ${TOTAL_CLASSES}
+  --num_classes ${TOTAL_CLASSES} \
+  --batch_size ${BATCH_SIZE} \
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --encoder_epochs ${INC_EPOCHS} \
+  --encoder_learning_rate ${LR}
 
 # 4) OSR evaluation (KNN-style)
 python3 knn.py \
