@@ -58,6 +58,13 @@ def parse_option():
                         choices=['cifar10', 'cifar100', 'mnist'], help='dataset')
     parser.add_argument('--method', type=str, default='SupCon',
                         choices=['SupCon', 'SimCLR'], help='choose method')
+    parser.add_argument('--data_folder', type=str, default='./datasets/', help='path to dataset root')
+    # naming alignment with encoder checkpoints
+    parser.add_argument('--temp', type=float, default=0.05)
+    parser.add_argument('--alfa', type=float, default=0.2)
+    parser.add_argument('--fixed_memory', type=int, default=2000)
+    parser.add_argument('--encoder_epochs', type=int, default=600)
+    parser.add_argument('--encoder_learning_rate', type=float, default=0.001)
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -71,7 +78,6 @@ def parse_option():
     opt = parser.parse_args()
 
     # set the path according to the environment
-    opt.data_folder = './datasets/'
 
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
@@ -79,10 +85,11 @@ def parse_option():
         opt.lr_decay_epochs.append(int(it))
 
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
-    opt.model_name = '{}_{}_class_{}_{}_lr_0.001_epochs_600_bsz_512_temp_0.05_alfa_0.2_mem_2000_incremental/last.pth'.\
-                         format(opt.method, opt.dataset, opt.num_classes, opt.model)
+    opt.model_name = '{}_{}_class_{}_{}_lr_{}_epochs_{}_bsz_{}_temp_{}_alfa_{}_mem_{}_incremental/last.pth'.\
+                         format(opt.method, opt.dataset, opt.num_classes, opt.model,
+                                opt.encoder_learning_rate, opt.encoder_epochs, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
     
-    opt.open_path = "./save/Linear_{}_{}_class_{}_{}_mem_2000.pt".format(opt.method, opt.dataset, opt.num_classes, opt.model)
+    opt.open_path = "./save/Linear_{}_{}_class_{}_{}_mem_{}.pt".format(opt.method, opt.dataset, opt.num_classes, opt.model, opt.fixed_memory)
 
     return opt
 
