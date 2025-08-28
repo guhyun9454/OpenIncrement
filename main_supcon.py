@@ -39,7 +39,7 @@ def parse_option():
                         help='save frequency')
     parser.add_argument('--batch_size', type=int, default=265,
                         help='batch_size')
-    parser.add_argument('--num_workers', type=int, default=16,
+    parser.add_argument('--num_workers', type=int, default=8,
                         help='num of workers to use')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of training epochs')
