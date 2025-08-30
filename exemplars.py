@@ -9,6 +9,7 @@ Created on Sun Jan 23 20:55:55 2022
 import pickle
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 from torch.autograd import Variable 
 import random
@@ -87,8 +88,8 @@ def createExemplars(opt, original_dataset, model_old=None, transform=None):
     else:
         opt.memory_per_class = max(1, opt.fixed_memory // num_classes_for_exemplar)
         
-    for c in range(0, num_classes_for_exemplar):
-        print("Class: ", c)
+    for c in tqdm(range(0, num_classes_for_exemplar), desc="Creating exemplars"):
+        # print("Class: ", c)
         c_dataset = original_dataset.get_image_class(c)
         # 유클리드 중심 기반 샘플링 사용 (Isometric에 가까운 중앙 근접 선택)
         exemplar_set, _, _ = classExemplars_euclidean(int(opt.memory_per_class), c_dataset, model_old, transform)
