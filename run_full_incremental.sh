@@ -109,7 +109,8 @@ python3 knn.py \
   --epochs ${BASE_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
   --learning_rate ${LR} \
-  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --exemplar_file ./exemplars/exemplar_${DATASET}_class_${INIT_CLASSES}_${MODEL}_memorysize_50_alfa_${ALFA}_temp_${TEMP}_mem_${FIXED_MEM}
 
 # 2) Incremental steps (INIT_CLASSES -> TOTAL_CLASSES by step of 10 or the remainder)
 current=${INIT_CLASSES}
@@ -171,7 +172,8 @@ while [[ ${current} -lt ${TOTAL_CLASSES} ]]; do
     --epochs ${INC_EPOCHS} \
     --batch_size ${BATCH_SIZE} \
     --learning_rate ${LR} \
-    --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
+    --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+    --exemplar_file ./exemplars/exemplar_${DATASET}_class_${next}_${MODEL}_memorysize_50_alfa_${ALFA}_temp_${TEMP}_mem_${FIXED_MEM}
   sleep 1
 done
 
@@ -209,6 +211,7 @@ python3 knn.py \
   --epochs ${INC_EPOCHS} \
   --batch_size ${BATCH_SIZE} \
   --learning_rate ${LR} \
-  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM}
+  --temp ${TEMP} --alfa ${ALFA} --fixed_memory ${FIXED_MEM} \
+  --exemplar_file ./exemplars/exemplar_${DATASET}_class_${TOTAL_CLASSES}_${MODEL}_memorysize_50_alfa_${ALFA}_temp_${TEMP}_mem_${FIXED_MEM}
 
 echo "All steps done."

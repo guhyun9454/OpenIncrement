@@ -141,6 +141,8 @@ def parse_option():
                          base_epochs_for_old_name, opt.batch_size, opt.temp, opt.alfa, opt.fixed_memory)
 
     opt.exemplar_file = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(opt.dataset, opt.num_init_classes, opt.model, opt.memory_size, opt.alfa, opt.temp, opt.fixed_memory)
+    # 다음 스텝 대비(혹은 본 스텝 종료 후) 전체 학습 클래스 수 기준의 엑셈플러 파일 경로
+    opt.exemplar_file_next = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(opt.dataset, opt.num_classes, opt.model, opt.memory_size, opt.alfa, opt.temp, opt.fixed_memory)
     # ensure exemplar directory exists
     exemplar_dir = os.path.dirname(opt.exemplar_file)
     if exemplar_dir and not os.path.isdir(exemplar_dir):
@@ -253,7 +255,12 @@ def set_loader(opt, model_old):
             exemplar_sets, exemplar_labels, _, exemplar_centers = pickle.load(f)
             loaded_from_file = True
     else:
-        transform = transforms.Compose([transforms.ToTensor(), normalize])
+        # 엑셈플러 선택 시 MNIST+ResNet의 경우 3채널 변환 포함
+        tfms_ex = []
+        if opt.dataset == 'mnist' and (not hasattr(opt, 'model') or opt.model.lower() != 'mlp'):
+            tfms_ex.append(transforms.Grayscale(num_output_channels=3))
+        tfms_ex += [transforms.ToTensor(), normalize]
+        transform = transforms.Compose(tfms_ex)
         exemplar_sets, exemplar_labels, exemplar_centers = createExemplars(opt, original_dataset, model_old, transform)
     #print(exemplar_sets.shape)
         
@@ -504,6 +511,56 @@ def main():
     save_file = os.path.join(
         opt.save_folder, 'last.pth')
     save_model(model_new, optimizer, opt, opt.epochs, save_file)
+
+    # (Exemplar Update) 현재까지 학습된 모든 클래스(0..num_classes-1)에 대해 엑셈플러 재구성 및 저장
+    try:
+        # 원본 데이터셋(모든 학습 완료 클래스 포함)
+        if opt.dataset == 'cifar10':
+            all_dataset = iCIFAR10(root=opt.data_folder, train=True, classes=range(0, opt.num_classes), download=True, transform=None)
+            mean = (0.4914, 0.4822, 0.4465)
+            std = (0.2023, 0.1994, 0.2010)
+        elif opt.dataset == 'cifar100':
+            all_dataset = iCIFAR100(root=opt.data_folder, train=True, classes=range(0, opt.num_classes), download=True, transform=None)
+            mean = (0.5071, 0.4867, 0.4408)
+            std = (0.2675, 0.2565, 0.2761)
+        elif opt.dataset == 'mnist':
+            all_dataset = mnist(root=opt.data_folder, train=True, classes=range(0, opt.num_classes), download=True, transform=None)
+            if opt.model.lower() == 'mlp':
+                mean = (0.1307,)
+                std = (0.3081,)
+            else:
+                mean = (0.1307, 0.1307, 0.1307)
+                std = (0.3081, 0.3081, 0.3081)
+        else:
+            all_dataset = None
+            mean = None
+            std = None
+
+        if all_dataset is not None:
+            normalize_all = transforms.Normalize(mean=mean, std=std)
+            tfms_all = []
+            if opt.dataset == 'mnist' and opt.model.lower() != 'mlp':
+                tfms_all.append(transforms.Grayscale(num_output_channels=3))
+            tfms_all += [transforms.ToTensor(), normalize_all]
+            transform_all = transforms.Compose(tfms_all)
+
+            # 저장 경로를 다음 스텝 파일로 지정
+            prev_file = opt.exemplar_file
+            prev_num_init = opt.num_init_classes
+            opt.exemplar_file = opt.exemplar_file_next
+            opt.exemplar_num_classes = opt.num_classes
+            # 디렉터리 보장
+            ex_dir = os.path.dirname(opt.exemplar_file)
+            if ex_dir and not os.path.isdir(ex_dir):
+                os.makedirs(ex_dir)
+            # 현재 모델(feature 기준)을 사용해 전 클래스 엑셈플러 생성/저장
+            createExemplars(opt, all_dataset, model_new, transform_all)
+            # 복구
+            opt.exemplar_file = prev_file
+            opt.exemplar_num_classes = prev_num_init
+            print("[Exemplar] saved updated exemplars to {}".format(opt.exemplar_file_next))
+    except Exception as e:
+        print("[Exemplar] update skipped due to error: {}".format(e))
     
 
 if __name__ == '__main__':

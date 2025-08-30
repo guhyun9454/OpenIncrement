@@ -21,8 +21,8 @@ def read_features(images, model, transform):
     features = []
     f = []
     for img in images:
-        #print(img.shape)
-        x = Variable(transform(Image.fromarray(np.squeeze(img), mode="L")), volatile=True)
+        # 입력 배열의 채널 수에 맞게 PIL 이미지 생성 (자동 모드)
+        x = Variable(transform(Image.fromarray(np.squeeze(img))), volatile=True)
         x = x.cuda()
         feature = model(x.unsqueeze(0))
         feature = feature.cpu().data.numpy()
@@ -81,23 +81,26 @@ def createExemplars(opt, original_dataset, model_old=None, transform=None):
     exemplar_labels = [] 
     exemplar_features_sets = []
     exemplar_centers = []
+    # 현재 엑셈플러를 만들 클래스 수(증분 스텝에서 전체(0..num_classes-1)로 갱신 가능)
+    num_classes_for_exemplar = getattr(opt, 'exemplar_num_classes', opt.num_init_classes)
     if opt.fixed_memory == 0:
         opt.memory_per_class = opt.memory_size
     else:
-        opt.memory_per_class = opt.fixed_memory // opt.num_init_classes + 1
+        opt.memory_per_class = max(1, opt.fixed_memory // num_classes_for_exemplar)
         
-    for c in range(0, opt.num_init_classes):
+    for c in range(0, num_classes_for_exemplar):
         print("Class: ", c)
         c_dataset = original_dataset.get_image_class(c)
-        exemplar_set = classExemplars_random(int(opt.memory_per_class), c_dataset)           #  classExemplars_similar(int(opt.memory_per_class), c_dataset, model_old, transform)   #
+        # 유클리드 중심 기반 샘플링 사용 (Isometric에 가까운 중앙 근접 선택)
+        exemplar_set, _, _ = classExemplars_euclidean(int(opt.memory_per_class), c_dataset, model_old, transform)
         #exemplar_center = centerComputing(exemplar_features)
         #exemplar_centers.append(exemplar_center)
         exemplar_sets.append(exemplar_set)
         #exemplar_features_sets.append(exemplar_features)
         exemplar_labels = exemplar_labels + [c]*int(opt.memory_per_class)
         
-    #exemplar_sets = np.reshape(np.array(exemplar_sets), (opt.memory_per_class*opt.num_init_classes, 1, opt.img_size, opt.img_size))          #### 1
-    exemplar_sets = np.reshape(np.array(exemplar_sets), (opt.memory_per_class*opt.num_init_classes, opt.img_size, opt.img_size, 3)) 
+    total_exemplars = opt.memory_per_class * num_classes_for_exemplar
+    exemplar_sets = np.reshape(np.array(exemplar_sets), (total_exemplars, opt.img_size, opt.img_size, 3)) 
     exemplar_labels = np.squeeze(np.array(exemplar_labels))   
     
     with open(opt.exemplar_file, "wb") as f:

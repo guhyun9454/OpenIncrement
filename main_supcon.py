@@ -317,6 +317,60 @@ def main():
         opt.save_folder, 'last.pth')
     save_model(model, optimizer, opt, opt.epochs, save_file)
 
+    # (Exemplar Init) 베이스 학습 직후 초기 클래스(0..num_classes-1) 엑셈플러 생성/저장
+    try:
+        # 이미지 크기 설정
+        if opt.dataset in ['cifar10', 'cifar100']:
+            opt.img_size = 32
+        elif opt.dataset == 'mnist':
+            opt.img_size = 28
+        else:
+            opt.img_size = getattr(opt, 'size', 32)
+
+        # 엑셈플러 파일 경로(초기 클래스 수 기준)
+        opt.exemplar_file = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(
+            opt.dataset, opt.num_classes, opt.model, opt.memory_size, opt.alfa, opt.temp, opt.fixed_memory)
+
+        # 데이터셋 및 정규화
+        if opt.dataset == 'cifar10':
+            from data_loader import iCIFAR10 as _DS
+            mean, std = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+            original_dataset = _DS(root=opt.data_folder or './datasets/', train=True,
+                                   classes=range(0, opt.num_classes), download=True, transform=None)
+        elif opt.dataset == 'cifar100':
+            from data_loader import iCIFAR100 as _DS
+            mean, std = (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+            original_dataset = _DS(root=opt.data_folder or './datasets/', train=True,
+                                   classes=range(0, opt.num_classes), download=True, transform=None)
+        elif opt.dataset == 'mnist':
+            from data_loader import mnist as _DS
+            # ResNet일 때 3채널 변환 필요
+            if opt.model.lower() == 'mlp':
+                mean, std = (0.1307,), (0.3081,)
+            else:
+                mean, std = (0.1307, 0.1307, 0.1307), (0.3081, 0.3081, 0.3081)
+            original_dataset = _DS(root=opt.data_folder or './datasets/', train=True,
+                                   classes=range(0, opt.num_classes), download=True, transform=None)
+        else:
+            original_dataset = None
+            mean, std = None, None
+
+        if original_dataset is not None:
+            from torchvision import transforms as _T
+            tfms = []
+            if opt.dataset == 'mnist' and opt.model.lower() != 'mlp':
+                tfms.append(_T.Grayscale(num_output_channels=3))
+            tfms += [_T.ToTensor(), _T.Normalize(mean=mean, std=std)]
+            transform = _T.Compose(tfms)
+
+            # 전체 클래스 수 기준으로 per-class 메모리 계산하도록 힌트 제공
+            opt.exemplar_num_classes = opt.num_classes
+            from exemplars import createExemplars as _create
+            _create(opt, original_dataset, model_old=model, transform=transform)
+            print("[Exemplar] saved initial exemplars to {}".format(opt.exemplar_file))
+    except Exception as e:
+        print("[Exemplar] init skipped due to error: {}".format(e))
+
 
 if __name__ == '__main__':
     main()
