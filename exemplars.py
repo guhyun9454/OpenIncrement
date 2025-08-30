@@ -81,8 +81,7 @@ def createExemplars(opt, original_dataset, model_old=None, transform=None):
     exemplar_labels = [] 
     exemplar_features_sets = []
     exemplar_centers = []
-    # 현재 엑셈플러를 만들 클래스 수(증분 스텝에서 전체(0..num_classes-1)로 갱신 가능)
-    num_classes_for_exemplar = getattr(opt, 'exemplar_num_classes', opt.num_init_classes)
+    num_classes_for_exemplar = opt.exemplar_num_classes
     if opt.fixed_memory == 0:
         opt.memory_per_class = opt.memory_size
     else:

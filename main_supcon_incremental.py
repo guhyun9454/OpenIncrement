@@ -261,6 +261,7 @@ def set_loader(opt, model_old):
             tfms_ex.append(transforms.Grayscale(num_output_channels=3))
         tfms_ex += [transforms.ToTensor(), normalize]
         transform = transforms.Compose(tfms_ex)
+        opt.exemplar_num_classes = opt.num_init_classes
         exemplar_sets, exemplar_labels, exemplar_centers = createExemplars(opt, original_dataset, model_old, transform)
     #print(exemplar_sets.shape)
         
@@ -307,9 +308,9 @@ def set_loader(opt, model_old):
         print("  exemplars: created and saved to '{}'".format(opt.exemplar_file))
     print("  exemplars: total {} | per_class ~{} (fixed_memory {} | memory_size {})".format(
         len(exemplar_labels),
-        getattr(opt, 'memory_per_class', None),
-        getattr(opt, 'fixed_memory', None),
-        getattr(opt, 'memory_size', None)))
+        opt.memory_per_class if 'memory_per_class' in opt.__dict__ else None,
+        opt.fixed_memory,
+        opt.memory_size))
     if exemplar_count_by_class:
         print("  exemplar class counts (subset): {}".format(
             dict(list(exemplar_count_by_class.items())[:5])
@@ -455,7 +456,7 @@ def main():
     print("[Incremental Setup]")
     print("  dataset: {} | model: {} | method: {}".format(opt.dataset, opt.model, opt.method))
     print("  base_epochs: {} | inc_epochs: {} | batch_size: {} | lr: {} | temp: {} | alfa: {}".format(
-        getattr(opt, 'base_epochs', None), opt.epochs, opt.batch_size, opt.learning_rate, opt.temp, opt.alfa))
+        opt.base_epochs, opt.epochs, opt.batch_size, opt.learning_rate, opt.temp, opt.alfa))
     print("  classes: old 0..{old_end} | learning {new_start}..{new_end} | total {total}".format(
         old_end=opt.num_init_classes-1,
         new_start=opt.num_init_classes,
@@ -496,7 +497,7 @@ def main():
         #loss = incremental_train(train_loader, model, model, criterion,
         #                         old_targets, optimizer, epoch, opt)
         print("[Epoch {}] learning classes {}..{} (total {}), memory per class {}".format(
-            epoch, opt.num_init_classes, opt.num_classes-1, opt.num_classes, getattr(opt, 'memory_per_class', None)))
+            epoch, opt.num_init_classes, opt.num_classes-1, opt.num_classes, opt.memory_per_class if 'memory_per_class' in opt.__dict__ else None))
         loss = train(train_loader, model_old, model_new, criterion, optimizer, epoch, opt, old_targets)
         
         time2 = time.time()
@@ -546,7 +547,6 @@ def main():
 
             # 저장 경로를 다음 스텝 파일로 지정
             prev_file = opt.exemplar_file
-            prev_num_init = opt.num_init_classes
             opt.exemplar_file = opt.exemplar_file_next
             opt.exemplar_num_classes = opt.num_classes
             # 디렉터리 보장
@@ -557,7 +557,6 @@ def main():
             createExemplars(opt, all_dataset, model_new, transform_all)
             # 복구
             opt.exemplar_file = prev_file
-            opt.exemplar_num_classes = prev_num_init
             print("[Exemplar] saved updated exemplars to {}".format(opt.exemplar_file_next))
     except Exception as e:
         print("[Exemplar] update skipped due to error: {}".format(e))

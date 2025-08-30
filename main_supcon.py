@@ -325,7 +325,7 @@ def main():
         elif opt.dataset == 'mnist':
             opt.img_size = 28
         else:
-            opt.img_size = getattr(opt, 'size', 32)
+            opt.img_size = opt.size
 
         # 엑셈플러 파일 경로(초기 클래스 수 기준)
         opt.exemplar_file = './exemplars/exemplar_{}_class_{}_{}_memorysize_{}_alfa_{}_temp_{}_mem_{}'.format(
@@ -363,7 +363,7 @@ def main():
             tfms += [_T.ToTensor(), _T.Normalize(mean=mean, std=std)]
             transform = _T.Compose(tfms)
 
-            # 전체 클래스 수 기준으로 per-class 메모리 계산하도록 힌트 제공
+            # 전체 클래스 수 기준으로 per-class 메모리 계산하도록 설정
             opt.exemplar_num_classes = opt.num_classes
             from exemplars import createExemplars as _create
             _create(opt, original_dataset, model_old=model, transform=transform)
