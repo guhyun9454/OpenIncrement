@@ -433,6 +433,36 @@ def evaluate_linear_classifier(encoder_model: torch.nn.Module,
     return (correct / max(1, total)) * 100.0
 
 
+def evaluate_till_now_linear(encoder_model: torch.nn.Module,
+                             classifier: torch.nn.Module,
+                             data_loader: List[Dict[str, DataLoader]],
+                             device: torch.device,
+                             task_id: int,
+                             acc_matrix: np.ndarray,
+                             args: argparse.Namespace) -> None:
+
+    for t in range(task_id + 1):
+        val_loader_t = data_loader[t]['val']
+        acc_t = evaluate_linear_classifier(
+            encoder_model, classifier, val_loader_t, device,
+            max_batches=(2 if getattr(args, 'develop', False) else None)
+        )
+        acc_matrix[t, task_id] = acc_t
+
+    A_i = [np.mean(acc_matrix[:i+1, i]) for i in range(task_id+1)]
+    A_last = A_i[-1]
+    A_avg = np.mean(A_i)
+
+    result_str = "[Average accuracy till task{}] A_last: {:.2f} A_avg: {:.2f}".format(task_id+1, A_last, A_avg)
+    
+    if task_id > 0:
+        forgetting = np.mean((np.max(acc_matrix, axis=1) - acc_matrix[:, task_id])[:task_id])
+        result_str += " Forgetting: {:.4f}".format(forgetting)
+    else:
+        forgetting = 0
+
+    print(result_str)
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -472,6 +502,8 @@ def main():
     all_val_datasets: List[torch.utils.data.Dataset] = []
     all_train_datasets: List[torch.utils.data.Dataset] = []
 
+    acc_matrix = np.zeros((args.num_tasks, args.num_tasks), dtype=np.float32)
+
     for task_id in range(args.num_tasks):
         print(f"\n{' Task %d ' % (task_id + 1):=^60}")
         current_train_loader = data_loader[task_id]['train']
@@ -500,6 +532,9 @@ def main():
         classifier_head = train_linear_classifier(model, lin_train_loader, args.num_classes, device, args.model, epochs=args.linear_epochs, lr=args.linear_lr, print_freq=args.print_freq, develop=args.develop)
         id_acc = evaluate_linear_classifier(model, classifier_head, id_eval_loader, device, max_batches=(2 if args.develop else None))
         print(f"[Linear-Classifier] Acc@ID (tasks 1..{task_id+1}) = {id_acc:.2f}%")
+
+        evaluate_till_now_linear(model, classifier_head, data_loader, device, task_id, acc_matrix, args)
+        print(acc_matrix)
 
         # Build/update exemplar features per class using current encoder and accumulated data
         # Determine memory_per_class
