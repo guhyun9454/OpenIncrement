@@ -198,6 +198,7 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     args = set_data_config(args)
+    args.verbose = True
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
