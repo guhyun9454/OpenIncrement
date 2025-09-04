@@ -162,6 +162,8 @@ def extract_encoder_features(model: torch.nn.Module, loader: DataLoader, device:
     model.eval()
     feats, labels = [], []
     for b_idx, (images, targets) in enumerate(loader):
+        if isinstance(images, (list, tuple)):
+            images = images[0]
         images = images.to(device, non_blocking=True)
         features = model.encoder(images)
         feats.append(features.detach().cpu().numpy())
@@ -179,6 +181,8 @@ def extract_embedding_features(model: torch.nn.Module, loader: DataLoader, devic
     model.eval()
     feats, labels = [], []
     for b_idx, (images, targets) in enumerate(loader):
+        if isinstance(images, (list, tuple)):
+            images = images[0]
         images = images.to(device, non_blocking=True)
         features = model(images)
         feats.append(features.detach().cpu().numpy())
@@ -376,6 +380,8 @@ def train_linear_classifier(encoder_model: torch.nn.Module,
 
         for idx, (images, labels) in enumerate(train_loader):
             data_time.update(time.time() - end)
+            if isinstance(images, (list, tuple)):
+                images = images[0]
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             with torch.no_grad():
@@ -413,6 +419,8 @@ def evaluate_linear_classifier(encoder_model: torch.nn.Module,
     classifier.eval()
     correct, total = 0, 0
     for b_idx, (images, targets) in enumerate(val_loader):
+        if isinstance(images, (list, tuple)):
+            images = images[0]
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         feats = encoder_model.encoder(images)
