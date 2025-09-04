@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import os
 import time
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 import numpy as np
 import torch
@@ -13,8 +12,9 @@ from timm.models import create_model
 
 from continual_datasets.build_incremental_scenario import build_continual_dataloader
 from continual_datasets.dataset_utils import set_data_config, get_ood_dataset
-from resnet_big import SupCEResNet
-from util import set_optimizer, AverageMeter
+from resnet_big import SupCEResNet, SupConResNet, LinearClassifier
+from util import set_optimizer, AverageMeter, TwoCropTransform
+from losses import SupConLoss
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,14 +36,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--print_freq', type=int, default=50)
 
+    # SupCon params
+    parser.add_argument('--temp', type=float, default=0.05)
+
     parser.add_argument('--ood_dataset', type=str, default=None, help='예: EMNIST, NotMNIST, etc.')
-    parser.add_argument('--K', type=int, default=10, help='KNN에서 사용할 K')
+    parser.add_argument('--K', type=int, default=10, help='KNN/OSNN에서 사용할 K')
+    parser.add_argument('--Ts', type=float, default=0.85, help='OSNN threshold Ts')
+    parser.add_argument('--Tr', type=float, default=1.9, help='OSNN threshold Tr')
 
     parser.add_argument('--fixed_memory', type=int, default=2000, help='전체 고정 메모리 사이즈(피처 개수 기준)')
     parser.add_argument('--memory_size', type=int, default=50, help='태스크당 최대 피처 개수(고정 메모리 미사용 시)')
     parser.add_argument('--mem_per_task', type=int, default=None, help='태스크당 메모리 개수 고정 (우선 적용)')
 
-    parser.add_argument('--save_dir', type=str, default='./save/VIL')
+    parser.add_argument('--linear_epochs', type=int, default=10)
+    parser.add_argument('--linear_lr', type=float, default=0.1)
 
     args = parser.parse_args()
     return args
@@ -64,9 +70,41 @@ def build_eval_loader_from_datasets(datasets: List[torch.utils.data.Dataset], ba
     return DataLoader(concat, sampler=sampler, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
 
-def train_one_task(model: torch.nn.Module, optimizer: torch.optim.Optimizer, train_loader: DataLoader, device: torch.device, epochs: int, print_freq: int) -> None:
-    criterion = torch.nn.CrossEntropyLoss().to(device)
+def _wrap_two_crop_transform(dataset) -> None:
+    try:
+        from torch.utils.data import Subset, ConcatDataset
+    except Exception:
+        Subset = object  # type: ignore
+        ConcatDataset = object  # type: ignore
+
+    # Recursively wrap transform with TwoCropTransform for train datasets
+    if hasattr(dataset, 'datasets') and isinstance(dataset.datasets, list):  # ConcatDataset
+        for ds in dataset.datasets:
+            _wrap_two_crop_transform(ds)
+        return
+    if hasattr(dataset, 'dataset'):  # Subset
+        _wrap_two_crop_transform(dataset.dataset)
+        return
+    if hasattr(dataset, 'transform') and dataset.transform is not None:
+        if not isinstance(dataset.transform, TwoCropTransform):
+            dataset.transform = TwoCropTransform(dataset.transform)
+
+
+def train_one_task_supcon(model: torch.nn.Module,
+                          optimizer: torch.optim.Optimizer,
+                          train_loader: DataLoader,
+                          device: torch.device,
+                          epochs: int,
+                          print_freq: int,
+                          temperature: float) -> None:
+    criterion = SupConLoss(temperature=temperature).to(device)
     model.train()
+
+    # ensure two-crop transform is applied to underlying dataset
+    try:
+        _wrap_two_crop_transform(train_loader.dataset)
+    except Exception:
+        pass
 
     for epoch in range(1, epochs + 1):
         batch_time = AverageMeter()
@@ -74,12 +112,18 @@ def train_one_task(model: torch.nn.Module, optimizer: torch.optim.Optimizer, tra
         end = time.time()
 
         for idx, (images, targets) in enumerate(train_loader):
+            # images: [view1, view2], each shape [B,C,H,W]
+            if isinstance(images, (list, tuple)) and len(images) == 2:
+                images = torch.cat([images[0], images[1]], dim=0)
             images = images.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
+            bsz = targets.size(0)
 
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, targets)
+            feats = model(images)
+            f1, f2 = torch.split(feats, [bsz, bsz], dim=0)
+            feats_pair = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            loss = criterion(feats_pair, targets)
             loss.backward()
             optimizer.step()
 
@@ -88,7 +132,7 @@ def train_one_task(model: torch.nn.Module, optimizer: torch.optim.Optimizer, tra
             end = time.time()
 
             if (idx + 1) % max(1, print_freq) == 0:
-                print(f"Train Epoch[{epoch}] Step[{idx+1}/{len(train_loader)}]\tTime {batch_time.val:.3f}({batch_time.avg:.3f})\tLoss {losses.val:.4f}({losses.avg:.4f})")
+                print(f"[SupCon] Epoch[{epoch}] Step[{idx+1}/{len(train_loader)}]\tTime {batch_time.val:.3f}({batch_time.avg:.3f})\tLoss {losses.val:.4f}({losses.avg:.4f})")
 
 
 @torch.no_grad()
@@ -108,14 +152,27 @@ def evaluate_classifier(model: torch.nn.Module, val_loader: DataLoader, device: 
 
 
 @torch.no_grad()
-def extract_features(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+def extract_encoder_features(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
     model.eval()
     feats, labels = [], []
     for images, targets in loader:
         images = images.to(device, non_blocking=True)
-        # encoder -> features (ResNet: model.encoder; ViT: wrapper.encoder)
         features = model.encoder(images)
-        features = F.normalize(features, dim=1)
+        feats.append(features.detach().cpu().numpy())
+        labels.append(targets.numpy())
+    if len(feats) == 0:
+        return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int64)
+    return np.concatenate(feats, axis=0), np.concatenate(labels, axis=0)
+
+
+@torch.no_grad()
+def extract_embedding_features(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+    """Return model's embedding (post-projection, normalized for SupConResNet)."""
+    model.eval()
+    feats, labels = [], []
+    for images, targets in loader:
+        images = images.to(device, non_blocking=True)
+        features = model(images)
         feats.append(features.detach().cpu().numpy())
         labels.append(targets.numpy())
     if len(feats) == 0:
@@ -154,16 +211,19 @@ def knn_avg_similarity_scores(query_feats: np.ndarray, memory_feats: np.ndarray,
     return topk.mean(axis=1)
 
 
-class ViTWrapper(torch.nn.Module):
-    def __init__(self, timm_model: torch.nn.Module):
+class ViTContrastiveWrapper(torch.nn.Module):
+    def __init__(self, timm_model: torch.nn.Module, feat_dim: int = 128):
         super().__init__()
-        self.backbone = timm_model
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.backbone(x)
+        self.backbone = timm_model  # num_classes=0 to use as encoder
+        # infer embedding dim
+        embed_dim = getattr(timm_model, 'num_features', None) or getattr(timm_model, 'embed_dim', 768)
+        self.head = torch.nn.Sequential(
+            torch.nn.Linear(embed_dim, embed_dim),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Linear(embed_dim, feat_dim),
+        )
 
     def encoder(self, x: torch.Tensor) -> torch.Tensor:
-        # features before classifier head
         feats = self.backbone.forward_features(x)
         try:
             feats = self.backbone.forward_head(feats, pre_logits=True)
@@ -171,14 +231,43 @@ class ViTWrapper(torch.nn.Module):
             pass
         return feats
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        z = self.encoder(x)
+        z = self.head(z)
+        return F.normalize(z, dim=1)
+
 
 def build_model(args) -> torch.nn.Module:
     if args.model == 'vit_b16':
-        timm_model = create_model('vit_base_patch16_224', pretrained=True, num_classes=args.num_classes)
-        model = ViTWrapper(timm_model)
+        timm_model = create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
+        model = ViTContrastiveWrapper(timm_model)
     else:
-        model = SupCEResNet(name=args.model, num_classes=args.num_classes)
+        model = SupConResNet(name=args.model)
     return model
+
+
+def _build_linear_classifier(model: torch.nn.Module, num_classes: int, model_name: str) -> torch.nn.Module:
+    # Try to use predefined LinearClassifier for ResNet backbones; otherwise infer input dim
+    try:
+        classifier = LinearClassifier(name=model_name, num_classes=num_classes)
+        return classifier
+    except Exception:
+        pass
+    # Fallback: infer in_features by a forward pass through encoder
+    # Use a dummy input with 3x224x224
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, 224, 224)
+        if next(model.parameters()).is_cuda:
+            dummy = dummy.cuda()
+        feat = model.encoder(dummy)
+        in_dim = feat.shape[1]
+    return torch.nn.Linear(in_dim, num_classes)
+
+
+def _build_concat_loader(datasets: List[torch.utils.data.Dataset], batch_size: int, num_workers: int, shuffle: bool) -> DataLoader:
+    concat = ConcatDataset(datasets)
+    sampler = torch.utils.data.RandomSampler(concat) if shuffle else SequentialSampler(concat)
+    return DataLoader(concat, sampler=sampler, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
 
 
 def compute_ood_metrics(id_scores: np.ndarray, ood_scores: np.ndarray) -> Tuple[float, float]:
@@ -192,6 +281,132 @@ def compute_ood_metrics(id_scores: np.ndarray, ood_scores: np.ndarray) -> Tuple[
     idx = np.abs(tpr - 0.95).argmin()
     fpr95 = fpr[idx]
     return auroc * 100.0, fpr95 * 100.0
+
+
+def _euclidean_exemplars_per_class(embeddings: np.ndarray, labels: np.ndarray, num_classes: int, memory_per_class: int) -> Tuple[np.ndarray, np.ndarray]:
+    exemplar_features: List[np.ndarray] = []
+    exemplar_labels: List[int] = []
+    for c in range(num_classes):
+        idxs = np.where(labels == c)[0]
+        if idxs.size == 0:
+            continue
+        feats_c = embeddings[idxs]
+        center = feats_c.mean(axis=0, keepdims=True)
+        dists = np.linalg.norm(feats_c - center, axis=1)
+        k = min(memory_per_class, dists.shape[0])
+        keep = np.argpartition(dists, kth=k-1)[:k]
+        exemplar_features.append(feats_c[keep])
+        exemplar_labels.extend([c] * k)
+    if len(exemplar_features) == 0:
+        return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int64)
+    return np.concatenate(exemplar_features, axis=0), np.array(exemplar_labels, dtype=np.int64)
+
+
+def _osnn_predict(test_feature: np.ndarray,
+                  exemplar_features: np.ndarray,
+                  exemplar_labels: np.ndarray,
+                  K: int,
+                  Ts: float,
+                  Tr: float) -> Tuple[float, int, float]:
+    # cosine similarities (features assumed normalized)
+    sims = exemplar_features @ test_feature.reshape(-1, 1)
+    sims = sims.squeeze(1)
+    # top-K indices
+    K_eff = min(K, sims.shape[0])
+    topk_idx = np.argpartition(sims, -K_eff)[-K_eff:]
+    topk_labels = exemplar_labels[topk_idx]
+    # average similarity of top-K
+    avg_sim = float(sims[topk_idx].mean())
+
+    # if all K belong to single class
+    from collections import Counter
+    cnt = Counter(topk_labels.tolist())
+    if len(cnt) == 1:
+        only_class = topk_labels[0]
+        if avg_sim > Ts:
+            return 10.0, int(only_class), avg_sim
+        else:
+            return 10.0, 1000, avg_sim  # OOD
+
+    # compute ratio R between best and second-best class sums
+    best_two = cnt.most_common(2)
+    best_c, second_c = best_two[0][0], best_two[1][0]
+    mask_best = (topk_labels == best_c)
+    mask_second = (topk_labels == second_c)
+    sum_best = float(sims[topk_idx][mask_best].sum())
+    sum_second = float(sims[topk_idx][mask_second].sum())
+    R = sum_best / max(1e-12, sum_second)
+    if R < Tr:
+        return R, 1000, avg_sim
+    else:
+        return R, int(best_c), avg_sim
+
+
+def train_linear_classifier(encoder_model: torch.nn.Module,
+                            train_loader: DataLoader,
+                            num_classes: int,
+                            device: torch.device,
+                            model_name: str,
+                            epochs: int,
+                            lr: float,
+                            print_freq: int) -> torch.nn.Module:
+    classifier = _build_linear_classifier(encoder_model, num_classes, model_name)
+    classifier = classifier.to(device)
+    criterion = torch.nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=lr, momentum=0.9, weight_decay=0.0)
+
+    encoder_model.eval()
+    for epoch in range(1, epochs + 1):
+        batch_time = AverageMeter()
+        data_time = AverageMeter()
+        losses = AverageMeter()
+        top1 = AverageMeter()
+        end = time.time()
+
+        for idx, (images, labels) in enumerate(train_loader):
+            data_time.update(time.time() - end)
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            with torch.no_grad():
+                feats = encoder_model.encoder(images)
+            logits = classifier(feats.detach())
+            loss = criterion(logits, labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # metrics
+            pred = torch.argmax(logits, dim=1)
+            acc = (pred == labels).float().mean().item() * 100.0
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc, images.size(0))
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if (idx + 1) % max(1, print_freq) == 0:
+                print(f"[Linear] Epoch[{epoch}] Step[{idx+1}/{len(train_loader)}]\tTime {batch_time.val:.3f}({batch_time.avg:.3f})\tLoss {losses.val:.4f}({losses.avg:.4f})\tAcc@1 {top1.val:.2f}({top1.avg:.2f})")
+
+    return classifier
+
+
+@torch.no_grad()
+def evaluate_linear_classifier(encoder_model: torch.nn.Module,
+                               classifier: torch.nn.Module,
+                               val_loader: DataLoader,
+                               device: torch.device) -> float:
+    encoder_model.eval()
+    classifier.eval()
+    correct, total = 0, 0
+    for images, targets in val_loader:
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+        feats = encoder_model.encoder(images)
+        logits = classifier(feats)
+        preds = torch.argmax(logits, dim=1)
+        correct += (preds == targets).sum().item()
+        total += targets.size(0)
+    return (correct / max(1, total)) * 100.0
 
 
 def main():
@@ -212,24 +427,27 @@ def main():
         ood_ds = get_ood_dataset(args.ood_dataset, args)
         ood_loader = DataLoader(ood_ds, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True)
 
-    memory_by_task: List[np.ndarray] = []
+    # for exemplar-based OOD
+    exemplar_features: Optional[np.ndarray] = None
+    exemplar_labels: Optional[np.ndarray] = None
     seen_tasks: int = 0
 
-    os.makedirs(args.save_dir, exist_ok=True)
+    
 
     print(f"{'VIL RUN':=^60}")
     print(f"dataset={args.dataset} | IL_mode={args.IL_mode} | tasks={args.num_tasks}")
     print(f"model={args.model} | epochs={args.epochs} | batch={args.batch_size} | lr={args.learning_rate}")
-    print(f"ood_method=KNN | ood_dataset={args.ood_dataset}")
-    print(f"save_dir={args.save_dir}")
+    print(f"ood_method=OSNN | ood_dataset={args.ood_dataset}")
 
     all_val_datasets: List[torch.utils.data.Dataset] = []
+    all_train_datasets: List[torch.utils.data.Dataset] = []
 
     for task_id in range(args.num_tasks):
         print(f"\n{' Task %d ' % (task_id + 1):=^60}")
         current_train_loader = data_loader[task_id]['train']
         current_val_loader = data_loader[task_id]['val']
         all_val_datasets.append(current_val_loader.dataset)
+        all_train_datasets.append(current_train_loader.dataset)
 
         current_classes: List[int] = class_mask[task_id] if class_mask is not None else list(range(args.num_classes))
         seen_tasks += 1
@@ -243,36 +461,58 @@ def main():
 
         print(f"domain(s)={domain_list[task_id] if domain_list is not None else 'N/A'} | classes={current_classes} | seen_tasks={seen_tasks} | mem_per_task={memory_per_task}")
 
-        train_one_task(model, optimizer, current_train_loader, device, epochs=args.epochs, print_freq=args.print_freq)
+        # SupCon training for current task
+        train_one_task_supcon(model, optimizer, current_train_loader, device, epochs=args.epochs, print_freq=args.print_freq, temperature=args.temp)
 
         id_eval_loader = build_eval_loader_from_datasets(all_val_datasets, args.batch_size, args.num_workers)
-        id_acc = evaluate_classifier(model, id_eval_loader, device)
-        print(f"[Classifier] Acc@ID (tasks 1..{task_id+1}) = {id_acc:.2f}%")
+        # Train linear classifier on accumulated train data (freeze encoder)
+        lin_train_loader = _build_concat_loader(all_train_datasets, args.batch_size, args.num_workers, shuffle=True)
+        classifier_head = train_linear_classifier(model, lin_train_loader, args.num_classes, device, args.model, epochs=args.linear_epochs, lr=args.linear_lr, print_freq=args.print_freq)
+        id_acc = evaluate_linear_classifier(model, classifier_head, id_eval_loader, device)
+        print(f"[Linear-Classifier] Acc@ID (tasks 1..{task_id+1}) = {id_acc:.2f}%")
 
-        feats_new, _ = extract_features(model, current_val_loader, device)
-        update_task_memory(feats_new, memory_by_task, memory_per_task)
-        if args.mem_per_task is not None or args.fixed_memory > 0:
-            for i in range(len(memory_by_task)):
-                if memory_by_task[i].shape[0] > memory_per_task:
-                    keep = np.random.choice(memory_by_task[i].shape[0], size=memory_per_task, replace=False)
-                    memory_by_task[i] = memory_by_task[i][keep]
-        mem_feats = pack_memory(memory_by_task)
-        print(f"[Memory] total feature count = {mem_feats.shape[0]} (tasks={len(memory_by_task)})")
+        # Build/update exemplar features per class using current encoder and accumulated data
+        # Determine memory_per_class
+        if args.fixed_memory == 0:
+            memory_per_class = args.memory_size
+        else:
+            memory_per_class = max(1, args.fixed_memory // max(1, args.num_classes))
 
-        if ood_loader is not None:
-            id_feats, _ = extract_features(model, id_eval_loader, device)
-            id_scores = knn_avg_similarity_scores(id_feats, mem_feats, K=args.K)
-            ood_feats, _ = extract_features(model, ood_loader, device)
-            ood_scores = knn_avg_similarity_scores(ood_feats, mem_feats, K=args.K)
+        ex_build_loader = _build_concat_loader(all_train_datasets, args.batch_size, args.num_workers, shuffle=False)
+        emb_all, lab_all = extract_embedding_features(model, ex_build_loader, device)
+        # ensure normalized for cosine in OSNN
+        if emb_all.size > 0:
+            # already normalized from SupConResNet forward; ensure anyway for ViT wrapper
+            norm = np.linalg.norm(emb_all, axis=1, keepdims=True) + 1e-12
+            emb_all = emb_all / norm
+        exemplar_features, exemplar_labels = _euclidean_exemplars_per_class(emb_all, lab_all, args.num_classes, memory_per_class)
+        print(f"[Exemplar] per_class={memory_per_class} | total={exemplar_features.shape[0] if exemplar_features is not None else 0}")
 
+        if ood_loader is not None and exemplar_features is not None and exemplar_features.size > 0:
+            # ID features
+            id_emb, id_lab = extract_embedding_features(model, id_eval_loader, device)
+            if id_emb.size > 0:
+                id_emb = id_emb / (np.linalg.norm(id_emb, axis=1, keepdims=True) + 1e-12)
+            # OOD features
+            ood_emb, ood_lab = extract_embedding_features(model, ood_loader, device)
+            if ood_emb.size > 0:
+                ood_emb = ood_emb / (np.linalg.norm(ood_emb, axis=1, keepdims=True) + 1e-12)
+
+            # OSNN scoring (use average similarity as score for AUROC like knn.py)
+            from collections import deque
+            SIn, SOut = deque(), deque()
+            for f in id_emb:
+                _, _, sim = _osnn_predict(f, exemplar_features, exemplar_labels, K=args.K, Ts=args.Ts, Tr=args.Tr)
+                SIn.append(sim)
+            for f in ood_emb:
+                _, _, sim = _osnn_predict(f, exemplar_features, exemplar_labels, K=args.K, Ts=args.Ts, Tr=args.Tr)
+                SOut.append(sim)
+            id_scores = np.array(SIn, dtype=np.float32)
+            ood_scores = np.array(SOut, dtype=np.float32)
             auroc, fpr95 = compute_ood_metrics(id_scores, ood_scores)
-            print(f"[OOD-KNN] AUROC {auroc:.2f}% | FPR@TPR95 {fpr95:.2f}%")
+            print(f"[OOD-OSNN] AUROC {auroc:.2f}% | FPR@TPR95 {fpr95:.2f}%")
 
-        ckpt_dir = os.path.join(args.save_dir, f"{args.dataset}_{args.model}")
-        os.makedirs(ckpt_dir, exist_ok=True)
-        ckpt_path = os.path.join(ckpt_dir, f"task_{task_id+1}_last.pth")
-        torch.save({'model': model.state_dict(), 'seen_tasks': seen_tasks}, ckpt_path)
-        print(f"[Save] checkpoint -> {ckpt_path}")
+        
 
     print("\nAll tasks completed.")
 
