@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument('--linear_epochs', type=int, default=10)
     parser.add_argument('--linear_lr', type=float, default=0.1)
+    parser.add_argument('--develop', action='store_true')
 
     args = parser.parse_args()
     return args
@@ -96,7 +97,8 @@ def train_one_task_supcon(model: torch.nn.Module,
                           device: torch.device,
                           epochs: int,
                           print_freq: int,
-                          temperature: float) -> None:
+                          temperature: float,
+                          develop: bool = False) -> None:
     criterion = SupConLoss(temperature=temperature).to(device)
     model.train()
 
@@ -133,48 +135,56 @@ def train_one_task_supcon(model: torch.nn.Module,
 
             if (idx + 1) % max(1, print_freq) == 0:
                 print(f"[SupCon] Epoch[{epoch}] Step[{idx+1}/{len(train_loader)}]\tTime {batch_time.val:.3f}({batch_time.avg:.3f})\tLoss {losses.val:.4f}({losses.avg:.4f})")
+            if develop and (idx + 1) >= 2:
+                break
 
 
 @torch.no_grad()
-def evaluate_classifier(model: torch.nn.Module, val_loader: DataLoader, device: torch.device) -> float:
+def evaluate_classifier(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, max_batches: Optional[int] = None) -> float:
     model.eval()
     correct = 0
     total = 0
-    for images, targets in val_loader:
+    for b_idx, (images, targets) in enumerate(val_loader):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         logits = model(images)
         preds = torch.argmax(logits, dim=1)
         correct += (preds == targets).sum().item()
         total += targets.size(0)
+        if max_batches is not None and (b_idx + 1) >= max_batches:
+            break
     acc = (correct / max(1, total)) * 100.0
     return acc
 
 
 @torch.no_grad()
-def extract_encoder_features(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+def extract_encoder_features(model: torch.nn.Module, loader: DataLoader, device: torch.device, max_batches: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
     model.eval()
     feats, labels = [], []
-    for images, targets in loader:
+    for b_idx, (images, targets) in enumerate(loader):
         images = images.to(device, non_blocking=True)
         features = model.encoder(images)
         feats.append(features.detach().cpu().numpy())
         labels.append(targets.numpy())
+        if max_batches is not None and (b_idx + 1) >= max_batches:
+            break
     if len(feats) == 0:
         return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int64)
     return np.concatenate(feats, axis=0), np.concatenate(labels, axis=0)
 
 
 @torch.no_grad()
-def extract_embedding_features(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+def extract_embedding_features(model: torch.nn.Module, loader: DataLoader, device: torch.device, max_batches: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
     """Return model's embedding (post-projection, normalized for SupConResNet)."""
     model.eval()
     feats, labels = [], []
-    for images, targets in loader:
+    for b_idx, (images, targets) in enumerate(loader):
         images = images.to(device, non_blocking=True)
         features = model(images)
         feats.append(features.detach().cpu().numpy())
         labels.append(targets.numpy())
+        if max_batches is not None and (b_idx + 1) >= max_batches:
+            break
     if len(feats) == 0:
         return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int64)
     return np.concatenate(feats, axis=0), np.concatenate(labels, axis=0)
@@ -349,7 +359,8 @@ def train_linear_classifier(encoder_model: torch.nn.Module,
                             model_name: str,
                             epochs: int,
                             lr: float,
-                            print_freq: int) -> torch.nn.Module:
+                            print_freq: int,
+                            develop: bool = False) -> torch.nn.Module:
     classifier = _build_linear_classifier(encoder_model, num_classes, model_name)
     classifier = classifier.to(device)
     criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -386,6 +397,8 @@ def train_linear_classifier(encoder_model: torch.nn.Module,
 
             if (idx + 1) % max(1, print_freq) == 0:
                 print(f"[Linear] Epoch[{epoch}] Step[{idx+1}/{len(train_loader)}]\tTime {batch_time.val:.3f}({batch_time.avg:.3f})\tLoss {losses.val:.4f}({losses.avg:.4f})\tAcc@1 {top1.val:.2f}({top1.avg:.2f})")
+            if develop and (idx + 1) >= 2:
+                break
 
     return classifier
 
@@ -394,11 +407,12 @@ def train_linear_classifier(encoder_model: torch.nn.Module,
 def evaluate_linear_classifier(encoder_model: torch.nn.Module,
                                classifier: torch.nn.Module,
                                val_loader: DataLoader,
-                               device: torch.device) -> float:
+                               device: torch.device,
+                               max_batches: Optional[int] = None) -> float:
     encoder_model.eval()
     classifier.eval()
     correct, total = 0, 0
-    for images, targets in val_loader:
+    for b_idx, (images, targets) in enumerate(val_loader):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         feats = encoder_model.encoder(images)
@@ -406,6 +420,8 @@ def evaluate_linear_classifier(encoder_model: torch.nn.Module,
         preds = torch.argmax(logits, dim=1)
         correct += (preds == targets).sum().item()
         total += targets.size(0)
+        if max_batches is not None and (b_idx + 1) >= max_batches:
+            break
     return (correct / max(1, total)) * 100.0
 
 
@@ -413,9 +429,15 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     args = set_data_config(args)
-    args.verbose = True
+    args.verbose = False
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+
+    if args.develop:
+        print("[DEVELOP] 개발 모드 활성화: 각 루프 2 iteration, epochs=1, linear_epochs=1")
+        args.epochs = min(args.epochs, 1)
+        args.linear_epochs = min(args.linear_epochs, 1)
+        args.print_freq = 1
 
     data_loader, class_mask, domain_list = build_continual_dataloader(args)
 
@@ -462,13 +484,13 @@ def main():
         print(f"domain(s)={domain_list[task_id] if domain_list is not None else 'N/A'} | classes={current_classes} | seen_tasks={seen_tasks} | mem_per_task={memory_per_task}")
 
         # SupCon training for current task
-        train_one_task_supcon(model, optimizer, current_train_loader, device, epochs=args.epochs, print_freq=args.print_freq, temperature=args.temp)
+        train_one_task_supcon(model, optimizer, current_train_loader, device, epochs=args.epochs, print_freq=args.print_freq, temperature=args.temp, develop=args.develop)
 
         id_eval_loader = build_eval_loader_from_datasets(all_val_datasets, args.batch_size, args.num_workers)
         # Train linear classifier on accumulated train data (freeze encoder)
         lin_train_loader = _build_concat_loader(all_train_datasets, args.batch_size, args.num_workers, shuffle=True)
-        classifier_head = train_linear_classifier(model, lin_train_loader, args.num_classes, device, args.model, epochs=args.linear_epochs, lr=args.linear_lr, print_freq=args.print_freq)
-        id_acc = evaluate_linear_classifier(model, classifier_head, id_eval_loader, device)
+        classifier_head = train_linear_classifier(model, lin_train_loader, args.num_classes, device, args.model, epochs=args.linear_epochs, lr=args.linear_lr, print_freq=args.print_freq, develop=args.develop)
+        id_acc = evaluate_linear_classifier(model, classifier_head, id_eval_loader, device, max_batches=(2 if args.develop else None))
         print(f"[Linear-Classifier] Acc@ID (tasks 1..{task_id+1}) = {id_acc:.2f}%")
 
         # Build/update exemplar features per class using current encoder and accumulated data
@@ -479,7 +501,7 @@ def main():
             memory_per_class = max(1, args.fixed_memory // max(1, args.num_classes))
 
         ex_build_loader = _build_concat_loader(all_train_datasets, args.batch_size, args.num_workers, shuffle=False)
-        emb_all, lab_all = extract_embedding_features(model, ex_build_loader, device)
+        emb_all, lab_all = extract_embedding_features(model, ex_build_loader, device, max_batches=(2 if args.develop else None))
         # ensure normalized for cosine in OSNN
         if emb_all.size > 0:
             # already normalized from SupConResNet forward; ensure anyway for ViT wrapper
@@ -490,11 +512,11 @@ def main():
 
         if ood_loader is not None and exemplar_features is not None and exemplar_features.size > 0:
             # ID features
-            id_emb, id_lab = extract_embedding_features(model, id_eval_loader, device)
+            id_emb, id_lab = extract_embedding_features(model, id_eval_loader, device, max_batches=(2 if args.develop else None))
             if id_emb.size > 0:
                 id_emb = id_emb / (np.linalg.norm(id_emb, axis=1, keepdims=True) + 1e-12)
             # OOD features
-            ood_emb, ood_lab = extract_embedding_features(model, ood_loader, device)
+            ood_emb, ood_lab = extract_embedding_features(model, ood_loader, device, max_batches=(2 if args.develop else None))
             if ood_emb.size > 0:
                 ood_emb = ood_emb / (np.linalg.norm(ood_emb, axis=1, keepdims=True) + 1e-12)
 
