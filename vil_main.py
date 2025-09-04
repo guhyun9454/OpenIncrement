@@ -9,6 +9,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader, SequentialSampler
 from timm.models import create_model
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from continual_datasets.build_incremental_scenario import build_continual_dataloader
 from continual_datasets.dataset_utils import set_data_config, get_ood_dataset
@@ -51,6 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--linear_epochs', type=int, default=10)
     parser.add_argument('--linear_lr', type=float, default=0.1)
     parser.add_argument('--develop', action='store_true')
+
+    # Logging / W&B
+    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', type=str, default='OpenIncrement', help='W&B project name')
+    parser.add_argument('--wandb_entity', type=str, default=None, help='W&B entity (team/user)')
+    parser.add_argument('--save', type=str, default='outputs', help='Directory to save figures and artifacts')
 
     args = parser.parse_args()
     return args
@@ -297,6 +306,60 @@ def compute_ood_metrics(id_scores: np.ndarray, ood_scores: np.ndarray) -> Tuple[
     return auroc * 100.0, fpr95 * 100.0
 
 
+def save_accuracy_heatmap(acc_matrix: np.ndarray, task_id: int, args: argparse.Namespace) -> str:
+    # 폴더 생성
+    save_dir = os.path.join(args.save, 'heatmaps')
+    os.makedirs(save_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(acc_matrix, annot=True, cmap='YlGnBu', ax=ax, vmin=0, vmax=100)
+
+    ax.set_title(f'Accuracy Heatmap (Task {task_id+1})')
+    ax.set_xlabel('After learning task')
+    ax.set_ylabel('Tested on task')
+
+    # 저장 경로 설정
+    save_path = os.path.join(save_dir, f'heatmap_task{task_id+1}.png')
+    plt.savefig(save_path)
+    plt.close()
+
+    return save_path
+
+
+def save_anomaly_histogram(id_scores: np.ndarray,
+                           ood_scores: np.ndarray,
+                           args: argparse.Namespace,
+                           suffix: str = '',
+                           task_id: Optional[int] = None) -> str:
+    plt.figure(figsize=(10, 6))
+
+    # 폴더 생성
+    save_dir = os.path.join(args.save, 'anomaly_histograms')
+    os.makedirs(save_dir, exist_ok=True)
+
+    # ID 및 OOD 점수 히스토그램 그리기
+    bins = np.linspace(
+        min(np.min(id_scores), np.min(ood_scores)),
+        max(np.max(id_scores), np.max(ood_scores)),
+        100
+    )
+
+    plt.hist(id_scores, bins=bins, alpha=0.5, label='ID', density=True)
+    plt.hist(ood_scores, bins=bins, alpha=0.5, label='OOD', density=True)
+
+    plt.title(f'Anomaly Score Distribution ({suffix.upper()})')
+    plt.xlabel('Score')
+    plt.ylabel('Density')
+    plt.legend()
+
+    task_str = f'_task{task_id+1}' if task_id is not None else ''
+    save_path = os.path.join(save_dir, f'anomaly_hist_{suffix}{task_str}.png')
+    plt.savefig(save_path)
+    plt.close()
+
+    return save_path
+
+
 def _euclidean_exemplars_per_class(embeddings: np.ndarray, labels: np.ndarray, num_classes: int, memory_per_class: int) -> Tuple[np.ndarray, np.ndarray]:
     exemplar_features: List[np.ndarray] = []
     exemplar_labels: List[int] = []
@@ -463,6 +526,29 @@ def evaluate_till_now_linear(encoder_model: torch.nn.Module,
 
     print(result_str)
 
+    # Accuracy heatmap (upper-triangular of seen tasks)
+    sub_matrix = acc_matrix[:task_id+1, :task_id+1]
+    mask_upper = np.triu(np.ones_like(sub_matrix, dtype=bool))
+    vis_matrix = np.where(mask_upper, sub_matrix, np.nan)
+    heatmap_path = save_accuracy_heatmap(vis_matrix, task_id, args)
+
+    # W&B logging
+    if getattr(args, 'wandb', False):
+        try:
+            import wandb
+            wandb.log({
+                "A_last (↑)": A_last,
+                "A_avg (↑)": A_avg,
+                "A_last": A_last,
+                "A_avg": A_avg,
+                "Forgetting (↓)": forgetting,
+                "Forgetting": forgetting,
+                "TASK": task_id + 1,
+                "Accuracy Heatmap": wandb.Image(heatmap_path),
+            })
+        except Exception as e:
+            print(f"[W&B] 로그 실패: {e}")
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -470,6 +556,34 @@ def main():
     args.verbose = True
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+
+    # Prepare output directory
+    os.makedirs(args.save, exist_ok=True)
+
+    # Initialize Weights & Biases
+    if getattr(args, 'wandb', False):
+        try:
+            import wandb
+            run_name = f"{args.dataset}-{args.IL_mode}-{args.model}-seed{args.seed}"
+            wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args), name=run_name)
+            # apply wandb.config overrides back to argparse args (for sweeps)
+            try:
+                cfg_dict = wandb.config.as_dict()
+                for k, v in cfg_dict.items():
+                    if hasattr(args, k):
+                        setattr(args, k, v)
+            except Exception as e:
+                print(f"[W&B] config 동기화 실패: {e}")
+            # per-run save directory
+            try:
+                run_id = getattr(wandb.run, 'id', None)
+                if run_id is not None:
+                    args.save = os.path.join(args.save, str(run_id))
+                    os.makedirs(args.save, exist_ok=True)
+            except Exception as e:
+                print(f"[W&B] 저장 경로 설정 실패: {e}")
+        except Exception as e:
+            print(f"[W&B] 초기화 실패: {e}")
 
     if args.develop:
         print("[DEVELOP] 개발 모드 활성화: 각 루프 2 iteration, epochs=1, linear_epochs=1")
@@ -534,7 +648,6 @@ def main():
         print(f"[Linear-Classifier] Acc@ID (tasks 1..{task_id+1}) = {id_acc:.2f}%")
 
         evaluate_till_now_linear(model, classifier_head, data_loader, device, task_id, acc_matrix, args)
-        print(acc_matrix)
 
         # Build/update exemplar features per class using current encoder and accumulated data
         # Determine memory_per_class
@@ -577,9 +690,31 @@ def main():
             auroc, fpr95 = compute_ood_metrics(id_scores, ood_scores)
             print(f"[OOD-OSNN] AUROC {auroc:.2f}% | FPR@TPR95 {fpr95:.2f}%")
 
+            # W&B: OOD metrics + histogram
+            if getattr(args, 'wandb', False):
+                try:
+                    import wandb
+                    wandb.log({
+                        "OSNN_AUROC (↑)": auroc,
+                        "OSNN_FPR@TPR95 (↓)": fpr95,
+                        "TASK": task_id + 1,
+                    })
+                    hist_path = save_anomaly_histogram(id_scores, ood_scores, args, suffix='osnn', task_id=task_id)
+                    wandb.log({f"Anomaly Histogram TASK {task_id+1} (OSNN)": wandb.Image(hist_path)})
+                except Exception as e:
+                    print(f"[W&B] OOD 로그 실패: {e}")
+
         
 
     print("\nAll tasks completed.")
+
+    # W&B finalize
+    if getattr(args, 'wandb', False):
+        try:
+            import wandb
+            wandb.finish()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
