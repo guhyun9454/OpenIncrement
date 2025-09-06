@@ -100,6 +100,26 @@ def _wrap_two_crop_transform(dataset) -> None:
             dataset.transform = TwoCropTransform(dataset.transform)
 
 
+def _unwrap_two_crop_transform(dataset) -> None:
+    try:
+        from torch.utils.data import Subset, ConcatDataset  # type: ignore
+    except Exception:
+        Subset = object  # type: ignore
+        ConcatDataset = object  # type: ignore
+
+    # Handle ConcatDataset
+    if hasattr(dataset, 'datasets') and isinstance(dataset.datasets, list):
+        for ds in dataset.datasets:
+            _unwrap_two_crop_transform(ds)
+        return
+    # Handle Subset
+    if hasattr(dataset, 'dataset'):
+        _unwrap_two_crop_transform(getattr(dataset, 'dataset'))
+        return
+    # Revert transform if wrapped
+    if hasattr(dataset, 'transform') and isinstance(getattr(dataset, 'transform', None), TwoCropTransform):
+        dataset.transform = dataset.transform.transform
+
 def train_one_task_supcon(model: torch.nn.Module,
                           optimizer: torch.optim.Optimizer,
                           train_loader: DataLoader,
@@ -639,6 +659,11 @@ def main():
 
         # SupCon training for current task
         train_one_task_supcon(model, optimizer, current_train_loader, device, epochs=args.epochs, print_freq=args.print_freq, temperature=args.temp, develop=args.develop)
+        # Revert TwoCrop so that subsequent loaders (linear/exemplar/OSNN) don't double memory
+        try:
+            _unwrap_two_crop_transform(current_train_loader.dataset)
+        except Exception:
+            pass
 
         id_eval_loader = build_eval_loader_from_datasets(all_val_datasets, args.batch_size, args.num_workers)
         # Train linear classifier on accumulated train data (freeze encoder)
