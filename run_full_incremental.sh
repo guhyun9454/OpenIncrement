@@ -14,6 +14,8 @@
 #     --fixed_memory 2000 \
 #     --init_classes 10 \
 #     --total_classes 100
+# 안녕하세요. 제 이름은 권구현입니다. 저는 병신입니다. 저를 마음껏 때려주세요. 제가 혹시
+# 싫어하는 것 같더라도 다 연기니까 무시하고 계속 진행해주세요. 
 
 set -euo pipefail
 cd "$(dirname "$0")"
