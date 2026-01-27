@@ -291,22 +291,46 @@ def compute_ood_scores(method: str, model: OpenIncrementNet, id_loader, ood_load
 
     if "exemplar_feats" not in GLOBAL_OOD_CONTEXT or "exemplar_labels" not in GLOBAL_OOD_CONTEXT:
         raise RuntimeError("OPENINCREMENT_KNN requires exemplar bank; call refresh_exemplar_bank() first.")
-    ex_feats = GLOBAL_OOD_CONTEXT["exemplar_feats"].to(device, non_blocking=True)
-    ex_labels = GLOBAL_OOD_CONTEXT["exemplar_labels"].to(device, non_blocking=True)
+    # IMPORTANT: exemplar feature bank는 GPU에 통째로 올리면 메모리 파편화/OOM이 쉽게 발생합니다.
+    # 그래서 feature는 CPU에 두고, chunk 단위로 GPU로 옮겨 KNN top-k를 갱신합니다.
+    ex_feats_cpu = GLOBAL_OOD_CONTEXT["exemplar_feats"].contiguous()  # (N, D) on CPU
+    ex_labels = GLOBAL_OOD_CONTEXT["exemplar_labels"].to(device, non_blocking=True)  # labels are cheap
     num_classes = int(GLOBAL_OOD_CONTEXT.get("num_classes", torch.tensor(0)).item())
     if num_classes <= 0 and ex_labels.numel() > 0:
         num_classes = int(ex_labels.max().item()) + 1
     k_fixed = int(GLOBAL_OOD_CONTEXT.get("knn_k", torch.tensor(10)).item())
+    chunk_size = int(GLOBAL_OOD_CONTEXT.get("knn_chunk", torch.tensor(4096)).item())
  
     def score_batch(inputs: torch.Tensor) -> torch.Tensor:
-        if ex_feats.numel() == 0:
+        if ex_feats_cpu.numel() == 0:
             return torch.zeros(inputs.size(0), device=device)
         feats = model.forward_features(inputs)
         feats = F.normalize(feats, dim=1)
-        sims = feats @ ex_feats.t()  # (B, N)
-        k = min(k_fixed, sims.size(1))
-        topk_sims, topk_idx = sims.topk(k=k, dim=1)
-        topk_labels = ex_labels[topk_idx]  # (B, k)
+        n_total = int(ex_feats_cpu.size(0))
+        k = min(k_fixed, n_total)
+        # running top-k across chunks
+        topk_sims = torch.full((feats.size(0), k), -1e9, device=device)
+        topk_idx = torch.full((feats.size(0), k), 0, device=device, dtype=torch.long)
+
+        for start in range(0, n_total, chunk_size):
+            end = min(start + chunk_size, n_total)
+            ex_chunk = ex_feats_cpu[start:end].to(device, non_blocking=True)  # (C, D)
+            sims_chunk = feats @ ex_chunk.t()  # (B, C)
+            k_chunk = min(k, sims_chunk.size(1))
+            cand_sims, cand_local = sims_chunk.topk(k=k_chunk, dim=1)
+            cand_idx = cand_local + start
+
+            # merge with running topk
+            merge_sims = torch.cat([topk_sims, cand_sims], dim=1)
+            merge_idx = torch.cat([topk_idx, cand_idx], dim=1)
+            new_sims, new_pos = merge_sims.topk(k=k, dim=1)
+            new_idx = merge_idx.gather(1, new_pos)
+            topk_sims, topk_idx = new_sims, new_idx
+
+            # free chunk tensors ASAP (helps reduce peak reserved memory)
+            del ex_chunk, sims_chunk, cand_sims, cand_local, cand_idx, merge_sims, merge_idx, new_sims, new_pos, new_idx
+
+        topk_labels = ex_labels[topk_idx]  # (B, k) labels on GPU (cheap)
         per_class_sum = torch.zeros((inputs.size(0), num_classes), device=device)
         per_class_sum.scatter_add_(1, topk_labels, topk_sims)
         total = topk_sims.sum(dim=1).clamp_min(1e-6)
@@ -384,6 +408,7 @@ class OpenIncrementRunner:
         GLOBAL_OOD_CONTEXT["exemplar_labels"] = y_cpu.clone()
         GLOBAL_OOD_CONTEXT["num_classes"] = torch.tensor(int(num_classes))
         GLOBAL_OOD_CONTEXT["knn_k"] = torch.tensor(int(self.args.knn_k))
+        GLOBAL_OOD_CONTEXT["knn_chunk"] = torch.tensor(int(self.args.ood_knn_chunk_size))
  
     def train_one_epoch(
         self,
@@ -869,6 +894,10 @@ class OpenIncrementRunner:
  
             results[method] = {"auroc": auroc, "fpr_at_tpr95": fpr_at_tpr95, "scores": all_scores}
  
+        # develop/연속 실행에서 GPU reserved 메모리 누적 방지
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return results
  
  
@@ -927,6 +956,7 @@ def build_argparser() -> argparse.ArgumentParser:
  
     # OSR / OOD
     p.add_argument("--knn_k", type=int, default=10)
+    p.add_argument("--ood_knn_chunk_size", type=int, default=4096, help="OPENINCREMENT_KNN chunk size (avoid GPU OOM)")
     p.add_argument("--ood_dataset", type=str, default="", help="Optional OOD dataset name (e.g., CIFAR100, SVHN, TinyImagenet...)")
     p.add_argument("--ood_method", type=str, default="OPENINCREMENT_KNN", help="OpenIncrement only: OPENINCREMENT_KNN (or ALL)")
     p.add_argument("--ood_develop", type=int, default=0, help="limit samples used for OOD eval")
@@ -952,12 +982,18 @@ def main(args) -> None:
         args.epochs = 1
         args.classifier_epochs = 1
         args.print_freq = 1
+        # ViT 메모리 안전을 위해 배치/리플레이도 축소
+        args.batch_size = min(int(args.batch_size), 16)
+        args.replay_batch_size = min(int(args.replay_batch_size), 4)
+        args.distill_batch_size = min(int(args.distill_batch_size), 4)
         # 데이터 로딩 오버헤드 최소화
         args.num_workers = 0
         # exemplar/ood 단계도 최소화
         args.exemplar_candidates_per_class = min(int(args.exemplar_candidates_per_class), int(args.develop_samples))
         args.exemplar_batch_size = min(int(args.exemplar_batch_size), int(args.develop_samples))
         args.classifier_batch_size = min(int(args.classifier_batch_size), int(args.develop_samples))
+        # KNN chunk도 작게 (GPU peak 메모리 감소)
+        args.ood_knn_chunk_size = min(int(args.ood_knn_chunk_size), 1024)
         if not args.ood_develop:
             args.ood_develop = int(args.develop_samples)
  
