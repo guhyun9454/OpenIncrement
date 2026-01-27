@@ -882,7 +882,7 @@ def build_argparser() -> argparse.ArgumentParser:
  
     # scenario / data
     p.add_argument("--dataset", type=str, default="CLEAR", choices=["CLEAR", "DomainNet", "CORe50", "iDigits"])
-    p.add_argument("--data_path", type=str, default="./data")
+    p.add_argument("--data_path", type=str, default="/local_datasets")
     p.add_argument("--IL_mode", type=str, default="vil", choices=["vil", "cil", "dil", "joint"])
     p.add_argument("--num_tasks", type=int, default=5)
     p.add_argument("--shuffle", action="store_true", help="shuffle class order (CIL)")
