@@ -415,12 +415,14 @@ class OpenIncrementRunner:
         train_loader,
         epoch: int,
         old_targets: Sequence[int],
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float, float]:
         self.model.train()
         if self.teacher is not None:
             self.teacher.eval()
  
         total_loss = 0.0
+        total_supcon = 0.0
+        total_dis = 0.0
         total_acc = 0.0
         total_samples = 0
  
@@ -498,18 +500,29 @@ class OpenIncrementRunner:
  
             batch_size = int(targets.size(0))
             total_loss += float(loss.item()) * batch_size
+            total_supcon += float(loss_supcon.item()) * batch_size
+            total_dis += float(loss_dis.item()) * batch_size
             total_acc += float(acc1.item()) * batch_size
             total_samples += batch_size
  
             if batch_idx % self.args.print_freq == 0:
                 running_avg_loss = total_loss / max(1, total_samples)
+                running_avg_supcon = total_supcon / max(1, total_samples)
+                running_avg_dis = total_dis / max(1, total_samples)
                 running_avg_acc = total_acc / max(1, total_samples)
                 print(
                     f"Epoch {epoch+1}, Batch [{batch_idx}/{len(train_loader)}]: "
-                    f"Running Avg Loss = {running_avg_loss:.4f}, Running Avg Acc@1 = {running_avg_acc:.2f}"
+                    f"Running Avg Loss = {running_avg_loss:.4f} | "
+                    f"SupCon = {running_avg_supcon:.4f} | Distill = {running_avg_dis:.4f} | "
+                    f"Head Acc@1 (not trained in this phase) = {running_avg_acc:.2f}"
                 )
  
-        return (total_loss / max(1, total_samples)), (total_acc / max(1, total_samples))
+        return (
+            (total_loss / max(1, total_samples)),
+            (total_acc / max(1, total_samples)),
+            (total_supcon / max(1, total_samples)),
+            (total_dis / max(1, total_samples)),
+        )
  
     @torch.no_grad()
     def _compute_bytes_per_sample(self, sample_x: torch.Tensor, sample_y: torch.Tensor) -> int:
@@ -726,11 +739,14 @@ class OpenIncrementRunner:
             epochs = args.epochs_first if (task_id == 0 and args.epochs_first > 0) else args.epochs
             for epoch in range(epochs):
                 epoch_start = time.time()
-                epoch_avg_loss, epoch_avg_acc = self.train_one_epoch(data_loader[task_id]["train"], epoch, old_targets)
+                epoch_avg_loss, epoch_avg_acc, epoch_avg_supcon, epoch_avg_dis = self.train_one_epoch(
+                    data_loader[task_id]["train"], epoch, old_targets
+                )
                 epoch_duration = time.time() - epoch_start
                 print(
                     f"Epoch [{epoch+1}/{epochs}] Completed in {str(datetime.timedelta(seconds=int(epoch_duration)))}: "
-                    f"Avg Loss = {epoch_avg_loss:.4f}, Avg Acc@1 = {epoch_avg_acc:.2f}"
+                    f"Avg Loss = {epoch_avg_loss:.4f} | SupCon = {epoch_avg_supcon:.4f} | Distill = {epoch_avg_dis:.4f} | "
+                    f"Head Acc@1 (not trained in this phase) = {epoch_avg_acc:.2f}"
                 )
             train_duration = time.time() - train_start
             print(f"Task {task_id+1} training completed in {str(datetime.timedelta(seconds=int(train_duration)))}")
